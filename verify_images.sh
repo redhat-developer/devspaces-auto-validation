@@ -10,7 +10,7 @@ while IFS= read -r image; do
   ((total_count++))
   echo "Checking [$total_count]: $image"
 
-  if skopeo inspect --retry-times 2 "docker://$image" > /dev/null 2>&1; then
+  if skopeo inspect --no-tags --retry-times 2 "docker://$image" > /dev/null 2>&1; then
     ((success_count++))
   else
     failed_images+=("$image")
