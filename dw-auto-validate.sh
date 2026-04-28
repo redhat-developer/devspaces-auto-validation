@@ -186,7 +186,7 @@ if [ -n "${PR_NUMBER}" ]; then
   curl -sL -o "${TMP_EDITOR_DEF}" "${EDITOR_DEFINITION}"
 
   # Replace the che-code image with the PR image (only the injector, not the runtime)
-  sed -i "s|image: quay.io/che-incubator/che-code:.*|image: ${PR_IMAGE}|" "${TMP_EDITOR_DEF}"
+  sed -i.bak "s|image: quay.io/che-incubator/che-code:.*|image: ${PR_IMAGE}|" "${TMP_EDITOR_DEF}" && rm -f "${TMP_EDITOR_DEF}.bak" 
 
   # Extract the spec content (everything after the metadata block: commands, events, components)
   EDITOR_DWT_NAME="che-code-pr-${PR_NUMBER}"
@@ -266,7 +266,7 @@ fi
 
 for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
   curl -sL -o ${TMP_DEVFILE} ${devfile_url}
-  sed -i 's/^/    /' ${TMP_DEVFILE}
+  sed -i.tmp 's/^/    /' ${TMP_DEVFILE} && rm -f "${TMP_DEVFILE}.tmp" 
 
   for image in "${IMAGES_LIST[@]}"; do
     #debug mode: stop after one iteration
@@ -283,7 +283,8 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
     # EDITOR_DEFINITION -> the editor definition url 
     # When using PR mode, replace uri with kubernetes reference; otherwise use uri
     if [ -n "${PR_NUMBER}" ]; then
-      EDITOR_SED_EXPR="s|uri: EDITOR_DEFINITION|kubernetes:\n        name: ${EDITOR_DWT_NAME}|"
+      EDITOR_SED_EXPR="s|uri: EDITOR_DEFINITION|kubernetes:\\
+             name: ${EDITOR_DWT_NAME}|"
     else
       EDITOR_SED_EXPR="s|EDITOR_DEFINITION|${EDITOR_DEFINITION}|"
     fi
@@ -306,7 +307,7 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
       state=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.phase}')
       sleep 1s
       log -n "."
-      count=$[${count}+1]
+      count=$((count+1))
     done
     if [ ${state} == "Running" ]; then
       log -e "\n${GREEN}${DEVWORKSPACE_NAME} is Running${NC}"

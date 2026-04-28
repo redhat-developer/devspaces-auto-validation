@@ -22,6 +22,9 @@ Automated validation tool for testing DevWorkspace instances on OpenShift cluste
 # Skip interactive scenario choice (valid values: sshd, jetbrains, vscode)
 ./dw-auto-validate.sh -s vscode
 
+# Test a che-code PR image (from che-incubator/che-code)
+./dw-auto-validate.sh -p 1234
+
 # Help
 ./dw-auto-validate.sh -h
 ```
@@ -38,13 +41,13 @@ Automated validation tool for testing DevWorkspace instances on OpenShift cluste
 - `oc` - OpenShift CLI
 - `jq` - JSON processor
 - `curl` - HTTP client (for fetching devfiles)
-- `skopeo` - Container image inspector (for verify_images.sh only)
+- `skopeo` - Container image inspector (for verify_images.sh and `-p` PR image verification)
 
 ## Architecture
 
 ### Main Script Flow (dw-auto-validate.sh)
 
-1. **Prerequisites Check**: Validates `oc` and `jq` installation, checks cluster login (prompts for web login if needed)
+1. **Prerequisites Check**: Validates `oc`, `jq` (and `skopeo` when using `-p`) installation, checks cluster login (prompts for web login if needed)
 2. **Scenario Selection**: Interactive prompt to choose scenario (1=sshd, 2=jetbrains, 3=vscode)
 3. **Settings Loading**: Sources `settings/settings-<SCENARIO>.env` to load configuration and validation function
 4. **Test Execution**:
@@ -60,6 +63,7 @@ Automated validation tool for testing DevWorkspace instances on OpenShift cluste
 - `-f`: Full mode - uses `images/images-full.txt` and `devfiles/devfiles-full.txt` instead of their default counterparts
 - `-d`: Debug mode - enables verbose output, runs only first test, skips cleanup (shows skipped resources)
 - `-s <scenario>`: Skip interactive scenario prompt by specifying the scenario directly (`sshd`, `jetbrains`, or `vscode`)
+- `-p <PR_NUMBER>`: Test a che-code PR image — downloads the editor definition, replaces the che-code image with `quay.io/che-incubator-pull-requests/che-code:pr-<PR_NUMBER>-amd64`, and creates a DevWorkspaceTemplate to use it
 - `-h`: Help - displays usage information
 
 **Debug mode specifics**: Sets `DEBUG=1`, `FULL=0`, `VERBOSE=1`, runs only the first test iteration (`[[ ${DEBUG} -eq 1 && ${total_count} == 1 ]] && continue`), skips cleanup to allow resource inspection.
@@ -162,28 +166,20 @@ All `validate_devworkspace()` functions follow this pattern:
 validate_devworkspace() {
   devfile_url=$1  # Receives devfile URL as first argument
 
-  # Find pod matching ${DEVWORKSPACE_NAME}
-  podNameAndDWName=$(oc get pods -o 'jsonpath={...}')
-  podName=$(echo ${podNameAndDWName} | grep ${DEVWORKSPACE_NAME} | cut -d, -f1)
-
-  # Get main container name
-  mainContainerName=$(oc get devworkspace ${DEVWORKSPACE_NAME} -o 'jsonpath={.spec.template.components[0].name}')
-
-  # Validate pod and container exist
-  if [ -z "${podName}" ] || [ -z "${mainContainerName}" ]; then
-    return 1
-  fi
+  # Resolve pod and container via shared helper
+  resolve_devworkspace_pod || return 1
 
   # Scenario-specific validation logic here
   # Return 0 for pass, 1 for fail
 }
 ```
 
+The shared `resolve_devworkspace_pod()` function sets `podName` and `mainContainerName` globals.
+
 **Critical details**:
-- Has access to `${DEVWORKSPACE_NS}`, `${DEVWORKSPACE_NAME}`, `log()`, `debug()`
+- Has access to `${DEVWORKSPACE_NS}`, `${DEVWORKSPACE_NAME}`, `log()`
 - Must return 0 for success, 1 for failure
 - Should use `&>/dev/null` on oc exec commands meant only for exit code checking
-- Use `debug()` to output diagnostic information visible only in debug mode
 
 ### Variable Quoting Requirements
 
@@ -205,7 +201,7 @@ count=0
 while [ "${state}" != "Running" ] && [ ${count} -lt ${TIMEOUT} ]; do
   state=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.phase}')
   sleep 1s
-  count=$[${count}+1]
+  count=$((count+1))
 done
 ```
 
@@ -217,7 +213,7 @@ podName=$(echo ${podNameAndDWName} | grep ${DEVWORKSPACE_NAME} | cut -d, -f1)
 
 **Getting main container name**:
 ```bash
-mainContainerName=$(oc get devworkspace ${DEVWORKSPACE_NAME} -o 'jsonpath={.spec.template.components[0].name}')
+mainContainerName=$(oc get devworkspace ${DEVWORKSPACE_NAME} -o json | jq -r '[.spec.template.components[] | select(.container) | .name] | first')
 ```
 
 ### Adding a New Scenario
