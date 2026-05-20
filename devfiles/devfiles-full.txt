@@ -1,5 +1,6 @@
 https://registry.devfile.io/devfiles/dotnet80
 https://registry.devfile.io/devfiles/go
+https://registry.devfile.io/devfiles/code-with-quarkus
 https://registry.devfile.io/devfiles/java-maven
 https://registry.devfile.io/devfiles/java-openliberty
 https://registry.devfile.io/devfiles/java-openliberty-gradle
@@ -20,13 +21,12 @@ https://registry.devfile.io/devfiles/nodejs-nuxtjs
 https://registry.devfile.io/devfiles/nodejs-react
 https://registry.devfile.io/devfiles/nodejs-svelte
 https://registry.devfile.io/devfiles/nodejs-vue
-https://registry.devfile.io/devfiles/ollama
 https://registry.devfile.io/devfiles/php-laravel
 https://registry.devfile.io/devfiles/python
 https://registry.devfile.io/devfiles/python-django
 https://registry.devfile.io/devfiles/udi
-https://registry.devfile.io/devfiles/nodejs-basic
-https://registry.devfile.io/devfiles/code-with-quarkus
-https://registry.devfile.io/devfiles/java-springboot-basic
-https://registry.devfile.io/devfiles/python-basic
-https://registry.devfile.io/devfiles/go-basic
+https://registry.devfile.io/devfiles/hermes
+https://registry.devfile.io/devfiles/ollama
+https://registry.devfile.io/devfiles/openclaw
+https://registry.devfile.io/devfiles/picoclaw
+https://registry.devfile.io/devfiles/zeroclaw

@@ -7,13 +7,13 @@ Automated validation tool for testing DevWorkspace instances on OpenShift cluste
 ### Running Tests
 
 ```bash
-# Basic validation (uses small numbers of entries - 3 images, 5 devfiles)
+# Basic validation (uses small lists - images/images.txt and devfiles/devfiles.txt)
 ./dw-auto-validate.sh
 
 # Verbose mode - shows detailed output
 ./dw-auto-validate.sh -v
 
-# Full test matrix (uses all entries from -full.txt files - all images, all devfiles. Takes significant time to complete!)
+# Full test matrix (uses *-full.txt files - all images, all devfiles. Takes significant time to complete!)
 ./dw-auto-validate.sh -f
 
 # Debug mode - verbose + runs only first test + no cleanup
@@ -81,38 +81,32 @@ Each scenario in `settings/settings-<SCENARIO>.env` exports:
 - `PROJECT_URL`: Git repository URL (must include surrounding double quotes)
 - `EDITOR_DEFINITION`: URL to the editor definition YAML
 - `EDITOR_COMPONENT_NAME`: Component name in the editor definition that contains the editor image (used by `-i`/`-p` to replace the correct image)
-- `validate_devworkspace()`: Function that validates the running DevWorkspace
+- `LANDING_PAGE_PORT`: Port to curl inside the pod to validate the editor is running
 
-#### Scenario Validation Methods
+#### Scenario Validation
 
-**sshd** (settings-sshd.env):
-- Timeout: 60s
-- Checks `/tmp/sshd.log` for "Server listening on"
-- Verifies SSHD server started successfully
+All scenarios use the same validation method: curl `localhost:${LANDING_PAGE_PORT}` inside the pod and check for HTTP 200.
 
-**jetbrains** (settings-jetbrains.env):
-- Timeout: 120s
-- Port-forwards to 3400, curls `127.0.0.1:3400`
-- Validates HTTP 200 response from JetBrains landing page
-- On failure, outputs `/idea-server/std.out` for debugging
-
-**vscode** (settings-vscode.env):
-- Timeout: 60s
-- Checks `/checode/entrypoint-logs.txt` for "Extension host agent listening on 3100"
-- Verifies VSCode extension host is listening
+| Scenario | Timeout | Landing Page Port |
+|----------|---------|-------------------|
+| sshd | 60s | 3400 |
+| jetbrains | 120s | 3400 |
+| vscode | 60s | 3100 |
 
 ### DevWorkspace Generation
 
 Uses `devworkspace-template.yaml` as base, performs sed substitutions in two stages:
 
-**Stage 1** - Metadata and devfile injection:
+**Stage 1** - Metadata, devfile, and projects injection:
 ```bash
 cat devworkspace-template.yaml | sed \
-  -e "/DEVFILE/r ${TMP_DEVFILE}" \    # Inject devfile content
-  -e '/DEVFILE/ d' \                  # Remove DEVFILE placeholder
+  -e "/DEVFILE/r ${TMP_DEVFILE}" \       # Inject devfile content
+  -e '/DEVFILE/ d' \                     # Remove DEVFILE placeholder
+  -e "/PROJECTS/r ${TMP_PROJECTS}" \     # Inject projects block
+  -e '/PROJECTS/ d' \                   # Remove PROJECTS placeholder
   -e "s|DEVWORKSPACE_NAME|...|" \
   -e "s|DEVWORKSPACE_NS|...|" \
-  -e "s|EDITOR_DEFINITION|...|" \
+  -e "${EDITOR_SED_EXPR}" \             # Editor definition (uri or kubernetes ref)
   -e "s|PROJECT_URL|...|"
 ```
 
@@ -122,6 +116,10 @@ eval "sed \"s|image: .*|image: ${image}|\" > ${TMP_DEVWORKSPACE}"
 ```
 
 The two-stage approach ensures devfile content is injected before image replacement.
+
+**Projects handling**: If the devfile contains `starterProjects`, those are extracted and converted into a `projects:` block. Otherwise, the scenario's `PROJECT_URL` is used as a fallback sample project.
+
+**Editor contribution**: When using `-p` or `-i` (override image), the editor contribution switches from `uri:` to `kubernetes: name:` referencing the applied DevWorkspaceTemplate.
 
 ### Logging and Output Control
 
@@ -140,16 +138,16 @@ Tracks test execution time using bash's `$SECONDS` variable:
 
 ```
 settings/
-  settings-sshd.env       # SSHD scenario: timeout=60s, validates /tmp/sshd.log
-  settings-jetbrains.env  # JetBrains scenario: timeout=120s, validates port 3400
-  settings-vscode.env     # VSCode scenario: timeout=60s, validates /checode/entrypoint-logs.txt
+  settings-sshd.env       # SSHD scenario: timeout=60s, port 3400
+  settings-jetbrains.env  # JetBrains scenario: timeout=120s, port 3400
+  settings-vscode.env     # VSCode scenario: timeout=60s, port 3100
 
 images/
   images.txt              # Quick test list (3 UDI images: ubi8, ubi9, ubi10)
-  images-full.txt         # Complete test matrix (UDI + base-developer-image variants)
+  images-full.txt         # Complete test matrix (UDI, base-developer-image, and UBI variants)
 
 devfiles/
-  devfiles.txt            # Quick test list (nodejs, go, python, php-laravel and java-quarkus devfile)
+  devfiles.txt            # Quick test list (nodejs, go, php-laravel, python)
   devfiles-full.txt       # Complete devfile list (32 devfiles from devfile registry)
 
 samples/
@@ -163,28 +161,15 @@ verify_images.sh           # Skopeo-based image accessibility checker
 
 ## Implementation Details
 
-### Validation Function Pattern
+### Validation Function
 
-All `validate_devworkspace()` functions follow this pattern:
+A single `validate_devworkspace()` function in the main script handles all scenarios:
 
-```bash
-validate_devworkspace() {
-  devfile_url=$1  # Receives devfile URL as first argument
+1. Calls `resolve_devworkspace_pod()` to set `podName` and `mainContainerName` globals
+2. Curls `localhost:${LANDING_PAGE_PORT}` inside the pod container
+3. Returns 0 if HTTP 200, 1 otherwise
 
-  # Resolve pod and container via shared helper
-  resolve_devworkspace_pod || return 1
-
-  # Scenario-specific validation logic here
-  # Return 0 for pass, 1 for fail
-}
-```
-
-The shared `resolve_devworkspace_pod()` function sets `podName` and `mainContainerName` globals.
-
-**Critical details**:
-- Has access to `${DEVWORKSPACE_NS}`, `${DEVWORKSPACE_NAME}`, `log()`
-- Must return 0 for success, 1 for failure
-- Should use `&>/dev/null` on oc exec commands meant only for exit code checking
+`resolve_devworkspace_pod()` finds the pod by DevWorkspace label and selects the main container from pod status, filtering out containers whose name starts with `che-`.
 
 ### Variable Quoting Requirements
 
@@ -216,14 +201,13 @@ podNameAndDWName=$(oc get pods -o 'jsonpath={range .items[*]}{.metadata.name}{",
 podName=$(echo ${podNameAndDWName} | grep ${DEVWORKSPACE_NAME} | cut -d, -f1)
 ```
 
-**Getting main container name**:
+**Getting main container name** (from pod status, excluding `che-*` containers):
 ```bash
-mainContainerName=$(oc get devworkspace ${DEVWORKSPACE_NAME} -o json | jq -r '[.spec.template.components[] | select(.container) | .name] | first')
+mainContainerName=$(oc get pod "${podName}" -o json | jq -r '[.status.containerStatuses[] | select(.state.running and (.name | test("^che-") | not))] | first | .name // empty')
 ```
 
 ### Adding a New Scenario
 
 1. Create `settings/settings-<name>.env`
-2. Export required variables: `TIMEOUT`, `DEVWORKSPACE_NAME`, `PROJECT_URL`, `EDITOR_DEFINITION`
-3. Implement `validate_devworkspace()` function that returns 0/1
-4. Update scenario selection in dw-auto-validate.sh (add option, update prompts)
+2. Export required variables: `TIMEOUT`, `DEVWORKSPACE_NAME`, `PROJECT_URL`, `EDITOR_DEFINITION`, `EDITOR_COMPONENT_NAME`, `LANDING_PAGE_PORT`
+3. Update scenario selection in dw-auto-validate.sh (add option, update prompts and `-s` validation)

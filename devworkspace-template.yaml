@@ -8,11 +8,7 @@ spec:
   routingClass: che # thanks claude
   template:
     DEVFILE
-    projects:
-      - name: project-sample
-        git:
-          remotes:
-            origin: PROJECT_URL
+    PROJECTS
 
   contributions:
     - name: editor-definition-component
