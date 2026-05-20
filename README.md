@@ -91,7 +91,7 @@ All scenarios use the same validation method: curl `localhost:${LANDING_PAGE_POR
 |----------|---------|-------------------|
 | sshd | 60s | 3400 |
 | jetbrains | 120s | 3400 |
-| vscode | 60s | 3100 |
+| vscode | 90s | 3100 |
 
 ### DevWorkspace Generation
 
@@ -140,7 +140,7 @@ Tracks test execution time using bash's `$SECONDS` variable:
 settings/
   settings-sshd.env       # SSHD scenario: timeout=60s, port 3400
   settings-jetbrains.env  # JetBrains scenario: timeout=120s, port 3400
-  settings-vscode.env     # VSCode scenario: timeout=60s, port 3100
+  settings-vscode.env     # VSCode scenario: timeout=90s, port 3100
 
 images/
   images.txt              # Quick test list (3 UDI images: ubi8, ubi9, ubi10)
