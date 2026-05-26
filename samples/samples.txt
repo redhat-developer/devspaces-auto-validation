@@ -1,1 +1,1 @@
-https://github.com/che-samples/web-nodejs-sample.git
+https://github.com/che-samples/web-nodejs-sample

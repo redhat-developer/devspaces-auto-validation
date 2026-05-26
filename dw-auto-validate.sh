@@ -40,7 +40,7 @@ while getopts "vfdhs:p:" o; do
       echo -e "${RED}Error:${NC} Invalid scenario '${SCENARIO}'. Valid options are: sshd, jetbrains, vscode." >&2
       exit 1
     fi
-    echo "Using scenario '${SCENARIO}'."
+    echo "Using '${SCENARIO}' scenario."
     ;;
     p)
     PR_NUMBER="${OPTARG}"
@@ -51,7 +51,14 @@ while getopts "vfdhs:p:" o; do
     echo -e "Using che-code image from PR #${PR_NUMBER}."
     ;;
     h)
-    echo "Help: This script accepts -v for verbose mode, -d for debug mode, -f for full images test, -s <scenario> to skip scenario choice (sshd|jetbrains|vscode), -p <PR_NUMBER> to test a che-code PR image (e.g. from che-incubator/che-code) and -h for help."
+    echo -e "Usage: $0 [OPTIONS]\n"
+    echo -e "Options:"
+    echo -e "  -v\t\t\tVerbose mode"
+    echo -e "  -d\t\t\tDebug mode (verbose + keep resources, single test only)"
+    echo -e "  -f\t\t\tFull test matrix (all images)"
+    echo -e "  -s <scenario>\t\tSkip scenario prompt (sshd|jetbrains|vscode)"
+    echo -e "  -p <PR_NUMBER>\tTest a che-code PR image (from che-incubator/che-code)"
+    echo -e "  -h\t\t\tShow this help message"
     exit 0
     ;;
     \?)
@@ -260,10 +267,15 @@ total_count=0
 START_TIME=$SECONDS
 
 if [ ${DEBUG} -eq 0 ]; then
+  total_tests=$(( ${#DEVFILE_URL_LIST[@]} * ${#IMAGES_LIST[@]} ))
   log "Iterating over ${#DEVFILE_URL_LIST[@]} Devfiles and ${#IMAGES_LIST[@]} Images"
 else
-  log "${YELLOW}DEBUG MODE!${NC} Only first devfile and first image are used."
+  total_tests=1
+  log "${YELLOW}DEBUG MODE!${NC} Only first devfile and first image used."
 fi
+
+# echo numbers of tests that will be ran
+echo -e "${BLUE}There will be ${total_tests} tests performed in total.${NC}"
 
 for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
   curl -sL -o ${TMP_DEVFILE} ${devfile_url}
@@ -314,17 +326,17 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
       log "\n${GREEN}${DEVWORKSPACE_NAME} is Running${NC}"
     else
       log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start${NC}"
-      echo "TEST ${devfile_url} with ${image} FAILED ❌"
+      echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌"
       failed_test+=("Devfile '$devfile_url' using image '$image'")
       continue
     fi
     log "Validating ${DEVWORKSPACE_NAME} .."
     validate_devworkspace ${devfile_url}
     if [ $? -eq 0 ]; then
-      echo "TEST ${devfile_url} with ${image} PASSED ✅"
+      echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} PASSED ✅"
       ((success_count++))
     else
-      echo "TEST ${devfile_url} with ${image} FAILED ❌"
+      echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌"
       failed_test+=("Devfile '$devfile_url' using image '$image'")
     fi
     sleep 1s
