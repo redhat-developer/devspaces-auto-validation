@@ -69,7 +69,7 @@ done
 
 log() {
   if [ ${VERBOSE} -eq 1 ]; then
-    echo ${@}
+    echo -e "${@}"
   fi
 }
 
@@ -77,17 +77,17 @@ log() {
 # Sets global variables: podName, mainContainerName
 # Returns 1 if pod or container cannot be found.
 resolve_devworkspace_pod() {
-  podNameAndDWName=$(oc get pods -o 'jsonpath={range .items[*]}{.metadata.name}{","}{.metadata.labels.controller\.devfile\.io/devworkspace_name}{end}')
-  log "podNameAndDWName: ${podNameAndDWName}"
-  podName=$(echo ${podNameAndDWName} | grep ${DEVWORKSPACE_NAME} | cut -d, -f1)
-  log "podName: ${podName}"
+  podNameAndDWName=$(oc get pods -o 'jsonpath={range .items[*]}{.metadata.name}{","}{.metadata.labels.controller\.devfile\.io/devworkspace_name}{"\n"}{end}')
+  log "${YELLOW}podNameAndDWName: \n${NC}${podNameAndDWName}"
+  podName=$(echo "${podNameAndDWName}" | grep ${DEVWORKSPACE_NAME} | cut -d, -f1)
+  log "${YELLOW}podName: \n${NC}${podName}"
   mainContainerName=$(oc get devworkspace ${DEVWORKSPACE_NAME} -o json | jq -r '[.spec.template.components[] | select(.container) | .name] | first')
-  log "mainContainerName: ${mainContainerName}"
+  log "${YELLOW}mainContainerName: \n${NC}${mainContainerName}"
   if [ -z "${podName}" ] || [ -z "${mainContainerName}" ]; then
     log "Could not find pod/container matching ${DEVWORKSPACE_NAME}"
     return 1
   fi
-  log "Found ${mainContainerName} container in ${podName} pod"
+  log "${GREEN}Found ${YELLOW}${mainContainerName}${NC} container in ${YELLOW}${podName}${NC} pod"
   return 0
 }
 
@@ -262,7 +262,7 @@ START_TIME=$SECONDS
 if [ ${DEBUG} -eq 0 ]; then
   log "Iterating over ${#DEVFILE_URL_LIST[@]} Devfiles and ${#IMAGES_LIST[@]} Images"
 else
-  log -e "${YELLOW}DEBUG MODE!${NC} Only first devfile and first image are used."
+  log "${YELLOW}DEBUG MODE!${NC} Only first devfile and first image are used."
 fi
 
 for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
@@ -272,7 +272,7 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
   for image in "${IMAGES_LIST[@]}"; do
     #debug mode: stop after one iteration
     [[ ${DEBUG} -eq 1 && ${total_count} == 1 ]] && continue
-    log -e "\n${BLUE}Begin test of ${devfile_url} with ${image}${NC}"
+    log "\n${BLUE}Begin test of ${devfile_url} with ${image}${NC}"
     ((total_count++))
     # Modify DevWorkspace template
     # Goal is to apply a devworkspace resource to the cluster, 
@@ -311,9 +311,9 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
       count=$((count+1))
     done
     if [ ${state} == "Running" ]; then
-      log -e "\n${GREEN}${DEVWORKSPACE_NAME} is Running${NC}"
+      log "\n${GREEN}${DEVWORKSPACE_NAME} is Running${NC}"
     else
-      log -e "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start${NC}"
+      log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start${NC}"
       echo "TEST ${devfile_url} with ${image} FAILED ❌"
       failed_test+=("Devfile '$devfile_url' using image '$image'")
       continue
@@ -354,7 +354,7 @@ if [ ${DEBUG} -eq 0 ]; then
 else
   EXTRA_MSG=""
   [ -n "${PR_NUMBER}" ] && EXTRA_MSG="\nTemporary editor definition file (${TMP_EDITOR_DEF}) not deleted\nTemporary devworkspace template file (${TMP_DWT}) not deleted\nRemote DevworkspaceTemplate (${EDITOR_DWT_NAME}) not deleted"
-  log -e "\n${YELLOW}Debug mode:${NC}\nRemote Devworkspace (${DEVWORKSPACE_NAME}) not deleted${DWT_MSG}\nTemporary devfile file ($TMP_DEVFILE) not deleted\nTemporary devworkspace file ($TMP_DEVWORKSPACE) not deleted${EXTRA_MSG}\nPlease delete remote workspaces if not needed anymore."
+  log "\n${YELLOW}Debug mode:${NC}\nRemote Devworkspace (${DEVWORKSPACE_NAME}) not deleted${DWT_MSG}\nTemporary devfile file ($TMP_DEVFILE) not deleted\nTemporary devworkspace file ($TMP_DEVWORKSPACE) not deleted${EXTRA_MSG}\nPlease delete remote Devworkspace if not needed anymore."
 fi
 
 # Calculate elapsed time
