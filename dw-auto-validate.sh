@@ -40,7 +40,7 @@ while getopts "vfdhs:p:" o; do
       echo -e "${RED}Error:${NC} Invalid scenario '${SCENARIO}'. Valid options are: sshd, jetbrains, vscode." >&2
       exit 1
     fi
-    echo "Using scenario '${SCENARIO}'."
+    echo "Using '${SCENARIO}' scenario."
     ;;
     p)
     PR_NUMBER="${OPTARG}"
@@ -51,7 +51,14 @@ while getopts "vfdhs:p:" o; do
     echo -e "Using che-code image from PR #${PR_NUMBER}."
     ;;
     h)
-    echo "Help: This script accepts -v for verbose mode, -d for debug mode, -f for full images test, -s <scenario> to skip scenario choice (sshd|jetbrains|vscode), -p <PR_NUMBER> to test a che-code PR image (e.g. from che-incubator/che-code) and -h for help."
+    echo -e "Usage: $0 [OPTIONS]\n"
+    echo -e "Options:"
+    echo -e "  -v\t\t\tVerbose mode"
+    echo -e "  -d\t\t\tDebug mode (verbose + keep resources, single test only)"
+    echo -e "  -f\t\t\tFull test matrix (all images)"
+    echo -e "  -s <scenario>\t\tSkip scenario prompt (sshd|jetbrains|vscode)"
+    echo -e "  -p <PR_NUMBER>\tTest a che-code PR image (from che-incubator/che-code)"
+    echo -e "  -h\t\t\tShow this help message"
     exit 0
     ;;
     \?)
@@ -69,7 +76,7 @@ done
 
 log() {
   if [ ${VERBOSE} -eq 1 ]; then
-    echo ${@}
+    echo -e "${@}"
   fi
 }
 
@@ -77,17 +84,17 @@ log() {
 # Sets global variables: podName, mainContainerName
 # Returns 1 if pod or container cannot be found.
 resolve_devworkspace_pod() {
-  podNameAndDWName=$(oc get pods -o 'jsonpath={range .items[*]}{.metadata.name}{","}{.metadata.labels.controller\.devfile\.io/devworkspace_name}{end}')
-  log "podNameAndDWName: ${podNameAndDWName}"
-  podName=$(echo ${podNameAndDWName} | grep ${DEVWORKSPACE_NAME} | cut -d, -f1)
-  log "podName: ${podName}"
+  podNameAndDWName=$(oc get pods -o 'jsonpath={range .items[*]}{.metadata.name}{","}{.metadata.labels.controller\.devfile\.io/devworkspace_name}{"\n"}{end}')
+  log "${YELLOW}podNameAndDWName: \n${NC}${podNameAndDWName}"
+  podName=$(echo "${podNameAndDWName}" | grep ${DEVWORKSPACE_NAME} | cut -d, -f1)
+  log "${YELLOW}podName: \n${NC}${podName}"
   mainContainerName=$(oc get devworkspace ${DEVWORKSPACE_NAME} -o json | jq -r '[.spec.template.components[] | select(.container) | .name] | first')
-  log "mainContainerName: ${mainContainerName}"
+  log "${YELLOW}mainContainerName: \n${NC}${mainContainerName}"
   if [ -z "${podName}" ] || [ -z "${mainContainerName}" ]; then
     log "Could not find pod/container matching ${DEVWORKSPACE_NAME}"
     return 1
   fi
-  log "Found ${mainContainerName} container in ${podName} pod"
+  log "${GREEN}Found ${YELLOW}${mainContainerName}${NC} container in ${YELLOW}${podName}${NC} pod"
   return 0
 }
 
@@ -260,10 +267,15 @@ total_count=0
 START_TIME=$SECONDS
 
 if [ ${DEBUG} -eq 0 ]; then
+  total_tests=$(( ${#DEVFILE_URL_LIST[@]} * ${#IMAGES_LIST[@]} ))
   log "Iterating over ${#DEVFILE_URL_LIST[@]} Devfiles and ${#IMAGES_LIST[@]} Images"
 else
-  log -e "${YELLOW}DEBUG MODE!${NC} Only first devfile and first image are used."
+  total_tests=1
+  log "${YELLOW}DEBUG MODE!${NC} Only first devfile and first image used."
 fi
+
+# echo numbers of tests that will be ran
+echo -e "${BLUE}There will be ${total_tests} tests performed in total.${NC}"
 
 for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
   curl -sL -o ${TMP_DEVFILE} ${devfile_url}
@@ -272,7 +284,7 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
   for image in "${IMAGES_LIST[@]}"; do
     #debug mode: stop after one iteration
     [[ ${DEBUG} -eq 1 && ${total_count} == 1 ]] && continue
-    log -e "\n${BLUE}Begin test of ${devfile_url} with ${image}${NC}"
+    log "\n${BLUE}Begin test of ${devfile_url} with ${image}${NC}"
     ((total_count++))
     # Modify DevWorkspace template
     # Goal is to apply a devworkspace resource to the cluster, 
@@ -311,20 +323,20 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
       count=$((count+1))
     done
     if [ ${state} == "Running" ]; then
-      log -e "\n${GREEN}${DEVWORKSPACE_NAME} is Running${NC}"
+      log "\n${GREEN}${DEVWORKSPACE_NAME} is Running${NC}"
     else
-      log -e "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start${NC}"
-      echo "TEST ${devfile_url} with ${image} FAILED ❌"
+      log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start${NC}"
+      echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌"
       failed_test+=("Devfile '$devfile_url' using image '$image'")
       continue
     fi
     log "Validating ${DEVWORKSPACE_NAME} .."
     validate_devworkspace ${devfile_url}
     if [ $? -eq 0 ]; then
-      echo "TEST ${devfile_url} with ${image} PASSED ✅"
+      echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} PASSED ✅"
       ((success_count++))
     else
-      echo "TEST ${devfile_url} with ${image} FAILED ❌"
+      echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌"
       failed_test+=("Devfile '$devfile_url' using image '$image'")
     fi
     sleep 1s
@@ -354,7 +366,7 @@ if [ ${DEBUG} -eq 0 ]; then
 else
   EXTRA_MSG=""
   [ -n "${PR_NUMBER}" ] && EXTRA_MSG="\nTemporary editor definition file (${TMP_EDITOR_DEF}) not deleted\nTemporary devworkspace template file (${TMP_DWT}) not deleted\nRemote DevworkspaceTemplate (${EDITOR_DWT_NAME}) not deleted"
-  log -e "\n${YELLOW}Debug mode:${NC}\nRemote Devworkspace (${DEVWORKSPACE_NAME}) not deleted${DWT_MSG}\nTemporary devfile file ($TMP_DEVFILE) not deleted\nTemporary devworkspace file ($TMP_DEVWORKSPACE) not deleted${EXTRA_MSG}\nPlease delete remote workspaces if not needed anymore."
+  log "\n${YELLOW}Debug mode:${NC}\nRemote Devworkspace (${DEVWORKSPACE_NAME}) not deleted${DWT_MSG}\nTemporary devfile file ($TMP_DEVFILE) not deleted\nTemporary devworkspace file ($TMP_DEVWORKSPACE) not deleted${EXTRA_MSG}\nPlease delete remote Devworkspace if not needed anymore."
 fi
 
 # Calculate elapsed time
