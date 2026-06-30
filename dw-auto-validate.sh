@@ -222,7 +222,7 @@ if [ -n "${OVERRIDE_IMAGE}" ]; then
   TMP_EDITOR_DEF=$(mktemp -t editor-def-XXX.yaml)
   curl -sL -o "${TMP_EDITOR_DEF}" "${EDITOR_DEFINITION}"
 
-  sed -i.bak "s|image: quay.io/che-incubator/che-code:.*|image: ${OVERRIDE_IMAGE}|" "${TMP_EDITOR_DEF}" && rm -f "${TMP_EDITOR_DEF}.bak" 
+  sed -i.bak "s|image: quay.io/che-incubator/.*|image: ${OVERRIDE_IMAGE}|" "${TMP_EDITOR_DEF}" && rm -f "${TMP_EDITOR_DEF}.bak" 
 
   if [ -n "${PR_NUMBER}" ]; then
     EDITOR_DWT_NAME="che-code-pr-${PR_NUMBER}"
