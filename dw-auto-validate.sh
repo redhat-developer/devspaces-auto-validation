@@ -135,7 +135,7 @@ if [ -n "${PR_NUMBER}" ]; then
     echo -e "\n${BLUE}Checking PR image...${NC}"
     log "Executing 'skopeo inspect'..."
     eval skopeo inspect --no-tags --retry-times 2 "docker://${PR_IMAGE}" ${QUIET}
-    if [ $? -eq 1 ]; then
+    if [ $? -ne 0 ]; then
       echo -e "${RED}Error:${NC} PR image '${PR_IMAGE}' not found. Make sure the GitHub Action has published the image." >&2
       exit 1
     fi
