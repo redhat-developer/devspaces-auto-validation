@@ -25,6 +25,9 @@ Automated validation tool for testing DevWorkspace instances on OpenShift cluste
 # Test a che-code PR image (from che-incubator/che-code)
 ./dw-auto-validate.sh -p 1234
 
+# Test a custom editor image
+./dw-auto-validate.sh -i quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-rhel9:3.29
+
 # Help
 ./dw-auto-validate.sh -h
 ```
@@ -41,13 +44,13 @@ Automated validation tool for testing DevWorkspace instances on OpenShift cluste
 - `oc` - OpenShift CLI
 - `jq` - JSON processor
 - `curl` - HTTP client (for fetching devfiles)
-- `skopeo` - Container image inspector (for verify_images.sh and `-p` PR image verification)
+- `skopeo` - Container image inspector (for verify_images.sh, `-p` PR image verification, and `-i` custom image verification)
 
 ## Architecture
 
 ### Main Script Flow (dw-auto-validate.sh)
 
-1. **Prerequisites Check**: Validates `oc`, `jq` (and `skopeo` when using `-p`) installation, checks cluster login (prompts for web login if needed)
+1. **Prerequisites Check**: Validates `oc`, `jq` (and `skopeo` when using `-p` or `-i`) installation, checks cluster login (prompts for web login if needed)
 2. **Scenario Selection**: Interactive prompt to choose scenario (1=sshd, 2=jetbrains, 3=vscode)
 3. **Settings Loading**: Sources `settings/settings-<SCENARIO>.env` to load configuration and validation function
 4. **Test Execution**:
@@ -64,6 +67,7 @@ Automated validation tool for testing DevWorkspace instances on OpenShift cluste
 - `-d`: Debug mode - enables verbose output, runs only first test, skips cleanup (shows skipped resources)
 - `-s <scenario>`: Skip interactive scenario prompt by specifying the scenario directly (`sshd`, `jetbrains`, or `vscode`)
 - `-p <PR_NUMBER>`: Test a che-code PR image — downloads the editor definition, replaces the che-code image with `quay.io/che-incubator-pull-requests/che-code:pr-<PR_NUMBER>-amd64`, and creates a DevWorkspaceTemplate to use it
+- `-i <IMAGE>`: Test a custom editor image — same mechanism as `-p` but with an arbitrary image reference (mutually exclusive with `-p`)
 - `-h`: Help - displays usage information
 
 **Debug mode specifics**: Sets `DEBUG=1`, `FULL=0`, `VERBOSE=1`, runs only the first test iteration (`[[ ${DEBUG} -eq 1 && ${total_count} == 1 ]] && continue`), skips cleanup to allow resource inspection.
