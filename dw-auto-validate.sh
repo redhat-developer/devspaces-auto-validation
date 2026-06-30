@@ -4,6 +4,7 @@ FULL=0
 DEBUG=0
 SCENARIO=""
 PR_NUMBER=""
+CUSTOM_IMAGE=""
 
 # colors for fun
 RED='\033[1;91m'
@@ -18,7 +19,7 @@ NC='\033[0m' # No Color
 # Parameters for fun or experts #
 #################################
 
-while getopts "vfdhs:p:" o; do
+while getopts "vfdhs:p:i:" o; do
   case "${o}" in
     v)
     VERBOSE=1
@@ -50,6 +51,10 @@ while getopts "vfdhs:p:" o; do
     fi
     echo -e "Using che-code image from PR #${PR_NUMBER}."
     ;;
+    i)
+    CUSTOM_IMAGE="${OPTARG}"
+    echo -e "Using custom editor image: ${CUSTOM_IMAGE}"
+    ;;
     h)
     echo -e "Usage: $0 [OPTIONS]\n"
     echo -e "Options:"
@@ -58,6 +63,7 @@ while getopts "vfdhs:p:" o; do
     echo -e "  -f\t\t\tFull test matrix (all images)"
     echo -e "  -s <scenario>\t\tSkip scenario prompt (sshd|jetbrains|vscode)"
     echo -e "  -p <PR_NUMBER>\tTest a che-code PR image (from che-incubator/che-code)"
+    echo -e "  -i <IMAGE>\t\tTest a custom editor image"
     echo -e "  -h\t\t\tShow this help message"
     exit 0
     ;;
@@ -66,6 +72,12 @@ while getopts "vfdhs:p:" o; do
     ;;
   esac
 done
+
+# -p and -i are mutually exclusive
+if [ -n "${PR_NUMBER}" ] && [ -n "${CUSTOM_IMAGE}" ]; then
+  echo -e "${RED}Error:${NC} -p and -i options are mutually exclusive." >&2
+  exit 1
+fi
 
 # quiet logs from oc
 [[ ${VERBOSE} -eq 0 ]] && QUIET="&>/dev/null"
@@ -134,13 +146,33 @@ if [ -n "${PR_NUMBER}" ]; then
     echo -e "${GREEN}Ok!${NC}"
     echo -e "\n${BLUE}Checking PR image...${NC}"
     log "Executing 'skopeo inspect'..."
-    eval skopeo inspect --no-tags --retry-times 2 "docker://${PR_IMAGE}" ${QUIET}
+    eval skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${PR_IMAGE}" ${QUIET}
     if [ $? -ne 0 ]; then
       echo -e "${RED}Error:${NC} PR image '${PR_IMAGE}' not found. Make sure the GitHub Action has published the image." >&2
       exit 1
     fi
     echo -e "${GREEN}Ok!${NC}"
   fi
+fi
+
+if [ -n "${CUSTOM_IMAGE}" ]; then
+  if [ -x "$(command -v skopeo)" ]; then
+    echo -e "\n${BLUE}Checking custom image...${NC}"
+    log "Executing 'skopeo inspect'..."
+    eval skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${CUSTOM_IMAGE}" ${QUIET}
+    if [ $? -ne 0 ]; then
+      echo -e "${YELLOW}Warning:${NC} Could not verify custom image '${CUSTOM_IMAGE}'. Proceeding anyway."
+    else
+      echo -e "${GREEN}Ok!${NC}"
+    fi
+  fi
+fi
+
+OVERRIDE_IMAGE=""
+if [ -n "${PR_NUMBER}" ]; then
+  OVERRIDE_IMAGE="quay.io/che-incubator-pull-requests/che-code:pr-${PR_NUMBER}-amd64"
+elif [ -n "${CUSTOM_IMAGE}" ]; then
+  OVERRIDE_IMAGE="${CUSTOM_IMAGE}"
 fi
 
 # You must be logged into your OpenShift Cluster
@@ -182,21 +214,21 @@ fi
 # user namespace where testing will occur
 DEVWORKSPACE_NS=$(oc project -q)
 
-# PR image mode: override the editor definition with a PR image
+# Override image mode: override the editor definition with a custom or PR image
 EDITOR_DWT_NAME=""
-if [ -n "${PR_NUMBER}" ]; then
-  PR_IMAGE="quay.io/che-incubator-pull-requests/che-code:pr-${PR_NUMBER}-amd64"
-  echo -e "\n${BLUE}Setting up editor definition from PR image: ${PR_IMAGE}${NC}"
+if [ -n "${OVERRIDE_IMAGE}" ]; then
+  echo -e "\n${BLUE}Setting up editor definition from override image: ${OVERRIDE_IMAGE}${NC}"
 
-  # Download the default editor definition from settings and create a DevWorkspaceTemplate with the PR image
   TMP_EDITOR_DEF=$(mktemp -t editor-def-XXX.yaml)
   curl -sL -o "${TMP_EDITOR_DEF}" "${EDITOR_DEFINITION}"
 
-  # Replace the che-code image with the PR image (only the injector, not the runtime)
-  sed -i.bak "s|image: quay.io/che-incubator/che-code:.*|image: ${PR_IMAGE}|" "${TMP_EDITOR_DEF}" && rm -f "${TMP_EDITOR_DEF}.bak" 
+  sed -i.bak "s|image: quay.io/che-incubator/che-code:.*|image: ${OVERRIDE_IMAGE}|" "${TMP_EDITOR_DEF}" && rm -f "${TMP_EDITOR_DEF}.bak" 
 
-  # Extract the spec content (everything after the metadata block: commands, events, components)
-  EDITOR_DWT_NAME="che-code-pr-${PR_NUMBER}"
+  if [ -n "${PR_NUMBER}" ]; then
+    EDITOR_DWT_NAME="che-code-pr-${PR_NUMBER}"
+  else
+    EDITOR_DWT_NAME="che-code-custom"
+  fi
   TMP_DWT=$(mktemp -t editor-dwt-XXX.yaml)
   cat > "${TMP_DWT}" <<DWTEOF
 apiVersion: workspace.devfile.io/v1alpha2
@@ -295,7 +327,7 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
     # PROJECT_URL -> one the project sample url in a list
     # EDITOR_DEFINITION -> the editor definition url 
     # When using PR mode, replace uri with kubernetes reference; otherwise use uri
-    if [ -n "${PR_NUMBER}" ]; then
+    if [ -n "${OVERRIDE_IMAGE}" ]; then
       EDITOR_SED_EXPR="s|uri: EDITOR_DEFINITION|kubernetes:\\
              name: ${EDITOR_DWT_NAME}|"
     else
@@ -348,14 +380,14 @@ done # devfile loop
 cleanup() {
   echo -e "\n${BLUE}Cleaning up resources...${NC}"
   eval "oc delete dw ${DEVWORKSPACE_NAME} ${QUIET}"
-  if [ -n "${PR_NUMBER}" ]; then
+  if [ -n "${OVERRIDE_IMAGE}" ]; then
     eval "oc delete devworkspacetemplate ${EDITOR_DWT_NAME} ${QUIET}"
   fi
   sleep 1s
 
   rm $TMP_DEVFILE
   rm $TMP_DEVWORKSPACE
-  if [ -n "${PR_NUMBER}" ]; then
+  if [ -n "${OVERRIDE_IMAGE}" ]; then
     rm $TMP_EDITOR_DEF
     rm $TMP_DWT
   fi
@@ -365,7 +397,7 @@ if [ ${DEBUG} -eq 0 ]; then
   cleanup
 else
   EXTRA_MSG=""
-  [ -n "${PR_NUMBER}" ] && EXTRA_MSG="\nTemporary editor definition file (${TMP_EDITOR_DEF}) not deleted\nTemporary devworkspace template file (${TMP_DWT}) not deleted\nRemote DevworkspaceTemplate (${EDITOR_DWT_NAME}) not deleted"
+  [ -n "${OVERRIDE_IMAGE}" ] && EXTRA_MSG="\nTemporary editor definition file (${TMP_EDITOR_DEF}) not deleted\nTemporary devworkspace template file (${TMP_DWT}) not deleted\nRemote DevworkspaceTemplate (${EDITOR_DWT_NAME}) not deleted"
   log "\n${YELLOW}Debug mode:${NC}\nRemote Devworkspace (${DEVWORKSPACE_NAME}) not deleted${DWT_MSG}\nTemporary devfile file ($TMP_DEVFILE) not deleted\nTemporary devworkspace file ($TMP_DEVWORKSPACE) not deleted${EXTRA_MSG}\nPlease delete remote Devworkspace if not needed anymore."
 fi
 
