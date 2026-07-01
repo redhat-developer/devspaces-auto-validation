@@ -80,6 +80,7 @@ Each scenario in `settings/settings-<SCENARIO>.env` exports:
 - `DEVWORKSPACE_NAME`: Name for the DevWorkspace instance (e.g., 'sshd-test', 'jetbrains-idea-test', 'vscode-test')
 - `PROJECT_URL`: Git repository URL (must include surrounding double quotes)
 - `EDITOR_DEFINITION`: URL to the editor definition YAML
+- `EDITOR_COMPONENT_NAME`: Component name in the editor definition that contains the editor image (used by `-i`/`-p` to replace the correct image)
 - `validate_devworkspace()`: Function that validates the running DevWorkspace
 
 #### Scenario Validation Methods
