@@ -1,0 +1,28 @@
+name: Dev Spaces Auto Validation
+on: [workflow_dispatch]
+
+jobs:
+  dw-auto-validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: ['vscode', 'sshd', 'jetbrains']
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install oc CLI
+        uses: redhat-actions/openshift-tools-installer@v1
+        with:
+          oc: latest
+      - name: Checkout Dev Spaces Auto Validation
+        uses: actions/checkout@v6
+        with:
+          repository: 'redhat-developer/devspaces-auto-validation'
+      - name: Login to OpenShift
+        uses: redhat-actions/oc-login@v2
+        with:
+          openshift_server_url: ${{ secrets.OC_SERVER }}
+          openshift_token: ${{ secrets.OC_TOKEN }}
+          namespace: ${{ secrets.OC_PROJECT }}
+      - name: Run Dev Spaces Auto Validation
+        run: |
+          ./dw-auto-validate.sh -v -s {{matrix.scenario}}
