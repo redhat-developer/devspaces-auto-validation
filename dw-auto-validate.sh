@@ -98,9 +98,14 @@ log() {
 resolve_devworkspace_pod() {
   podNameAndDWName=$(oc get pods -o 'jsonpath={range .items[*]}{.metadata.name}{","}{.metadata.labels.controller\.devfile\.io/devworkspace_name}{"\n"}{end}')
   log "${YELLOW}podNameAndDWName: \n${NC}${podNameAndDWName}"
-  podName=$(echo "${podNameAndDWName}" | grep ${DEVWORKSPACE_NAME} | cut -d, -f1)
+  podName=$(echo "${podNameAndDWName}" | grep "${DEVWORKSPACE_NAME}" | cut -d, -f1)
   log "${YELLOW}podName: \n${NC}${podName}"
-  mainContainerName=$(oc get devworkspace ${DEVWORKSPACE_NAME} -o json | jq -r '[.spec.template.components[] | select(.container) | .name] | first')
+  podCount=$(echo "${podName}" | grep -c .)
+  if [ "${podCount}" -gt 1 ]; then
+    log "${RED}Found ${podCount} pods matching ${DEVWORKSPACE_NAME}, expected exactly one${NC}"
+    return 1
+  fi
+  mainContainerName=$(oc get devworkspace "${DEVWORKSPACE_NAME}" -o json | jq -r '[.spec.template.components[] | select(.container) | .name] | first')
   log "${YELLOW}mainContainerName: \n${NC}${mainContainerName}"
   if [ -z "${podName}" ] || [ -z "${mainContainerName}" ]; then
     log "Could not find pod/container matching ${DEVWORKSPACE_NAME}"
@@ -146,7 +151,7 @@ if [ -n "${PR_NUMBER}" ]; then
     echo -e "${GREEN}Ok!${NC}"
     echo -e "\n${BLUE}Checking PR image...${NC}"
     log "Executing 'skopeo inspect'..."
-    eval skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${PR_IMAGE}" ${QUIET}
+    eval skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${PR_IMAGE}" "${QUIET}"
     if [ $? -ne 0 ]; then
       echo -e "${RED}Error:${NC} PR image '${PR_IMAGE}' not found. Make sure the GitHub Action has published the image." >&2
       exit 1
@@ -159,7 +164,7 @@ if [ -n "${CUSTOM_IMAGE}" ]; then
   if [ -x "$(command -v skopeo)" ]; then
     echo -e "\n${BLUE}Checking custom image...${NC}"
     log "Executing 'skopeo inspect'..."
-    eval skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${CUSTOM_IMAGE}" ${QUIET}
+    eval skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${CUSTOM_IMAGE}" "${QUIET}"
     if [ $? -ne 0 ]; then
       echo -e "${YELLOW}Warning:${NC} Could not verify custom image '${CUSTOM_IMAGE}'. Proceeding anyway."
     else
@@ -179,11 +184,11 @@ fi
 echo -e "\n${BLUE}Checking cluster connection...${NC}"
 log "Executing 'oc whoami'..."
 current_cluster=$(oc config current-context)
-eval oc whoami --insecure-skip-tls-verify ${QUIET}
+eval oc whoami --insecure-skip-tls-verify "${QUIET}"
 if [ $? -eq 1 ]; then
   echo -e "${YELLOW}Not connected.${NC} Do you want to login to current cluster? Current cluster is ${PURPLE}${current_cluster}.${NC}"
   while true; do
-    read -p "(y/n)? : " yn
+    read -rp "(y/n)? : " yn
     case $yn in
       [Yy]* ) oc login --web; break;;
       [Nn]* ) exit;;
@@ -198,7 +203,7 @@ fi
 if [ -z "${SCENARIO}" ]; then
   echo -e "\n${BLUE}Choose the dedicated scenario to run the validation test suite.${NC}\n1-sshd\n2-jetbrains\n3-vscode"
   while true; do
-    read -p "(1/2/3)? : " scenario
+    read -rp "(1/2/3)? : " scenario
     case $scenario in
       1 ) SCENARIO=sshd; break;;
       2 ) SCENARIO=jetbrains; break;;
@@ -209,7 +214,8 @@ if [ -z "${SCENARIO}" ]; then
 fi
 
 # Read values from scenario's setting
-. settings/settings-${SCENARIO}.env
+# shellcheck source=settings/settings-vscode.env
+. "settings/settings-${SCENARIO}.env"
 
 # user namespace where testing will occur
 DEVWORKSPACE_NS=$(oc project -q)
@@ -250,7 +256,7 @@ DWTEOF
 fi
 
 # Temporary storage for generated files
-TMP_DEVFILE=$(mktemp -t devfile-${SCENARIO}-XXX.yaml)
+TMP_DEVFILE=$(mktemp -t devfile-"${SCENARIO}"-XXX.yaml)
 TMP_DEVWORKSPACE=$(mktemp -t devworkspace-XXX.yaml)
 
 # parsing images list
@@ -310,8 +316,8 @@ fi
 echo -e "${BLUE}There will be ${total_tests} tests performed in total.${NC}"
 
 for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
-  curl -sL -o ${TMP_DEVFILE} ${devfile_url}
-  sed -i.tmp 's/^/    /' ${TMP_DEVFILE} && rm -f "${TMP_DEVFILE}.tmp" 
+  curl -sL -o "${TMP_DEVFILE}" "${devfile_url}"
+  sed -i.tmp 's/^/    /' "${TMP_DEVFILE}" && rm -f "${TMP_DEVFILE}.tmp" 
 
   for image in "${IMAGES_LIST[@]}"; do
     #debug mode: stop after one iteration
@@ -348,13 +354,13 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
     state=""
     log -n "Waiting for ${DEVWORKSPACE_NAME} .."
     count=0
-    while [ "${state}" != "Running" ] && [ ${count} -lt ${TIMEOUT} ]; do
-      state=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.phase}')
+    while [ "${state}" != "Running" ] && [ ${count} -lt "${TIMEOUT}" ]; do
+      state=$(oc get dw "${DEVWORKSPACE_NAME}" -o 'jsonpath={.status.phase}')
       sleep 1s
       log -n "."
       count=$((count+1))
     done
-    if [ ${state} == "Running" ]; then
+    if [ "${state}" == "Running" ]; then
       log "\n${GREEN}${DEVWORKSPACE_NAME} is Running${NC}"
     else
       log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start${NC}"
@@ -363,7 +369,7 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
       continue
     fi
     log "Validating ${DEVWORKSPACE_NAME} .."
-    validate_devworkspace ${devfile_url}
+    validate_devworkspace "${devfile_url}"
     if [ $? -eq 0 ]; then
       echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} PASSED ✅"
       ((success_count++))
@@ -385,11 +391,11 @@ cleanup() {
   fi
   sleep 1s
 
-  rm $TMP_DEVFILE
-  rm $TMP_DEVWORKSPACE
+  rm "$TMP_DEVFILE"
+  rm "$TMP_DEVWORKSPACE"
   if [ -n "${OVERRIDE_IMAGE}" ]; then
-    rm $TMP_EDITOR_DEF
-    rm $TMP_DWT
+    rm "$TMP_EDITOR_DEF"
+    rm "$TMP_DWT"
   fi
 }
 
