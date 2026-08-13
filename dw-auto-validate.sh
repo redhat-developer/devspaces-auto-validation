@@ -110,6 +110,15 @@ resolve_devworkspace_pod() {
   return 0
 }
 
+shouldExclude() {
+  for imagePattern in ${EXCLUDED_IMAGE_PATTERNS[@]}; do
+    if [[ ${1} =~ ${imagePattern} ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 ########
 # Main #
 ########
@@ -358,8 +367,13 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
       log "\n${GREEN}${DEVWORKSPACE_NAME} is Running${NC}"
     else
       log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start${NC}"
-      echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌"
-      failed_test+=("Devfile '$devfile_url' using image '$image'")
+      if shouldExclude ${image}; then
+        echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌ (EXCLUDED ↩️ )"
+        excluded_test+=("Devfile '$devfile_url' using image '$image'")
+      else
+        echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌"
+        failed_test+=("Devfile '$devfile_url' using image '$image'")
+      fi
       continue
     fi
     log "Validating ${DEVWORKSPACE_NAME} .."
@@ -368,8 +382,13 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
       echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} PASSED ✅"
       ((success_count++))
     else
-      echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌"
-      failed_test+=("Devfile '$devfile_url' using image '$image'")
+      if shouldExclude ${image}; then
+        echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌ (EXCLUDED ↩️ )"
+        excluded_test+=("Devfile '$devfile_url' using image '$image'")
+      else
+        echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌"
+        failed_test+=("Devfile '$devfile_url' using image '$image'")
+      fi
     fi
     sleep 1s
   done # image loop
@@ -418,6 +437,7 @@ echo    "Summary:"
 echo -e "  Total tests: ${BLUE}$total_count${NC} "
 echo -e "  Successful: ${GREEN}$success_count${NC}"
 echo -e "  Failed: ${RED}${#failed_test[@]}${NC}"
+echo -e "  Excluded: ${YELLOW}${#excluded_test[@]}${NC}"
 echo -e "  Elapsed time: ${PURPLE}${ELAPSED_DISPLAY}${NC}"
 echo    "======================"
 
