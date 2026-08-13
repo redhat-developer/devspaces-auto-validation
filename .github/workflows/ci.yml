@@ -1,12 +1,36 @@
 name: Dev Spaces Auto Validation
-on: [workflow_dispatch]
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      EDITOR_DEFINITION_SSH:
+        description: 'The (optional) editor definition URL for SSHD.'
+        type: string
+      EDITOR_DEFINITION_VSCODE:
+        description: 'The (optional) editor definition URL for VSCODE.'
+        type: string
+      EDITOR_DEFINITION_JETBRAINS:
+        description: 'The (optional) editor definition URL for JETBRAINS.'
+        type: string
 
 jobs:
   dw-auto-validate:
     strategy:
       fail-fast: false
       matrix:
-        scenario: ['vscode', 'sshd', 'jetbrains']
+        include:
+          - scenario: vscode
+            image: ''
+          - scenario: vscode
+            image: 'quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-rhel9:3.29'
+          - scenario: sshd
+            image: ''
+          - scenario: sshd
+            image: 'quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-sshd-rhel9:3.29'
+          - scenario: jetbrains
+            image: ''
+          - scenario: jetbrains
+            image: 'quay.io/redhat-user-workloads/devspaces-tenant/devspaces/jetbrains-ide-rhel9:3.29'
     runs-on: ubuntu-latest
     steps:
       - name: Install oc CLI
@@ -25,4 +49,19 @@ jobs:
           namespace: ${{ secrets.OC_PROJECT }}
       - name: Run Dev Spaces Auto Validation
         run: |
-          ./dw-auto-validate.sh -v -s {{matrix.scenario}}
+          if [ "${{ inputs.EDITOR_DEFINITION_SSH }}" != '' ]; then
+            sed -i "s|https://.*\.yaml|${{ inputs.EDITOR_DEFINITION }}|" settings/settings-sshd.env
+          fi
+          if [ "${{ inputs.EDITOR_DEFINITION_VSCODE }}" != '' ]; then
+            sed -i "s|https://.*\.yaml|${{ inputs.EDITOR_DEFINITION }}|" settings/settings-vscode.env
+          fi
+          if [ "${{ inputs.EDITOR_DEFINITION_JETBRAINS }}" != '' ]; then
+            sed -i "s|https://.*\.yaml|${{ inputs.EDITOR_DEFINITION }}|" settings/settings-jetbrains.env
+          fi
+          cp images/images-full.txt images/images.txt
+          sed -i '/nodejs/!d' devfiles/devfiles.txt
+          EXTRA_ARGS=""
+          if [ -n "${{ matrix.image }}" ]; then
+            EXTRA_ARGS="-i ${{ matrix.image }}"
+          fi
+          ./dw-auto-validate.sh -v -s ${{ matrix.scenario }} ${EXTRA_ARGS}
