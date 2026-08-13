@@ -114,7 +114,7 @@ validate_devworkspace() {
   resolve_devworkspace_pod || return 1
 
   log "Checking editor on localhost:${LANDING_PAGE_PORT}"
-  http_code=$(oc exec -n ${DEVWORKSPACE_NS} ${podName} -c ${mainContainerName} -- curl -s -o /dev/null -w '%{http_code}' http://localhost:${LANDING_PAGE_PORT})
+  http_code=$(oc exec -n "${DEVWORKSPACE_NS}" "${podName}" -c "${mainContainerName}" -- curl -s -o /dev/null -w '%{http_code}' http://localhost:${LANDING_PAGE_PORT})
   if [ "${http_code}" == "200" ]; then
     log "${GREEN}localhost:${VALIDATION_PORT} returned HTTP ${http_code}${NC}"
     return 0
@@ -169,7 +169,7 @@ if [ -n "${PR_NUMBER}" ]; then
     echo -e "${GREEN}Ok!${NC}"
     echo -e "\n${BLUE}Checking PR image...${NC}"
     log "Executing 'skopeo inspect'..."
-    eval skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${PR_IMAGE}" ${QUIET}
+    eval skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${PR_IMAGE}" "${QUIET}"
     if [ $? -ne 0 ]; then
       echo -e "${RED}Error:${NC} PR image '${PR_IMAGE}' not found. Make sure the GitHub Action has published the image." >&2
       exit 1
@@ -182,7 +182,7 @@ if [ -n "${CUSTOM_IMAGE}" ]; then
   if [ -x "$(command -v skopeo)" ]; then
     echo -e "\n${BLUE}Checking custom image...${NC}"
     log "Executing 'skopeo inspect'..."
-    eval skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${CUSTOM_IMAGE}" ${QUIET}
+    eval skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${CUSTOM_IMAGE}" "${QUIET}"
     if [ $? -ne 0 ]; then
       echo -e "${YELLOW}Warning:${NC} Could not verify custom image '${CUSTOM_IMAGE}'. Proceeding anyway."
     else
@@ -202,11 +202,11 @@ fi
 echo -e "\n${BLUE}Checking cluster connection...${NC}"
 log "Executing 'oc whoami'..."
 current_cluster=$(oc config current-context)
-eval oc whoami --insecure-skip-tls-verify ${QUIET}
+eval oc whoami --insecure-skip-tls-verify "${QUIET}"
 if [ $? -eq 1 ]; then
   echo -e "${YELLOW}Not connected.${NC} Do you want to login to current cluster? Current cluster is ${PURPLE}${current_cluster}.${NC}"
   while true; do
-    read -p "(y/n)? : " yn
+    read -rp "(y/n)? : " yn
     case $yn in
       [Yy]* ) oc login --web; break;;
       [Nn]* ) exit;;
@@ -221,7 +221,7 @@ fi
 if [ -z "${SCENARIO}" ]; then
   echo -e "\n${BLUE}Choose the dedicated scenario to run the validation test suite.${NC}\n1-sshd\n2-jetbrains\n3-vscode"
   while true; do
-    read -p "(1/2/3)? : " scenario
+    read -rp "(1/2/3)? : " scenario
     case $scenario in
       1 ) SCENARIO=sshd; break;;
       2 ) SCENARIO=jetbrains; break;;
@@ -232,7 +232,8 @@ if [ -z "${SCENARIO}" ]; then
 fi
 
 # Read values from scenario's setting
-. settings/settings-${SCENARIO}.env
+# shellcheck source=settings/settings-vscode.env
+. settings/settings-"${SCENARIO}".env
 
 # user namespace where testing will occur
 DEVWORKSPACE_NS=$(oc project -q)
@@ -273,7 +274,7 @@ DWTEOF
 fi
 
 # Temporary storage for generated files
-TMP_DEVFILE=$(mktemp -t devfile-${SCENARIO}-XXX.yaml)
+TMP_DEVFILE=$(mktemp -t devfile-"${SCENARIO}"-XXX.yaml)
 TMP_DEVWORKSPACE=$(mktemp -t devworkspace-XXX.yaml)
 
 # parsing images list
@@ -333,7 +334,7 @@ fi
 echo -e "${BLUE}There will be ${total_tests} tests performed in total.${NC}"
 
 for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
-  http_code=$(curl -sL -o ${TMP_DEVFILE} -w '%{http_code}' ${devfile_url})
+  http_code=$(curl -sL -o "${TMP_DEVFILE}" -w '%{http_code}' "${devfile_url}")
   if [ "${http_code}" != "200" ]; then
     echo "${devfile_url} — fetch failed (HTTP ${http_code}), skipping this devfile. Numbers might not be accurate. ❌"
     failed_test+=("Devfile '${devfile_url}' — fetch failed (HTTP ${http_code})")
@@ -344,13 +345,13 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
   # otherwise fall back to the default sample project.
   # Must check before indenting the devfile.
   TMP_PROJECTS=$(mktemp -t projects-XXX.yaml)
-  if grep -q '^starterProjects:' ${TMP_DEVFILE}; then
-    sed -n '/^starterProjects:/,/^[a-zA-Z]/{/^starterProjects:/p; /^  /p}' ${TMP_DEVFILE} | \
+  if grep -q '^starterProjects:' "${TMP_DEVFILE}"; then
+    sed -n '/^starterProjects:/,/^[a-zA-Z]/{/^starterProjects:/p; /^  /p}' "${TMP_DEVFILE}" | \
     sed 's/^starterProjects:/projects:/' | \
-    sed 's/^/    /' > ${TMP_PROJECTS}
+    sed 's/^/    /' > "${TMP_PROJECTS}"
 
   else
-    cat > ${TMP_PROJECTS} <<'PROJEOF'
+    cat > "${TMP_PROJECTS}" <<'PROJEOF'
     projects:
       - name: project-sample
         git:
@@ -359,7 +360,7 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
 PROJEOF
   fi
 
-  sed -i.tmp 's/^/    /' ${TMP_DEVFILE} && rm -f "${TMP_DEVFILE}.tmp"
+  sed -i.tmp 's/^/    /' "${TMP_DEVFILE}" && rm -f "${TMP_DEVFILE}.tmp"
 
   for image in "${IMAGES_LIST[@]}"; do
     #debug mode: stop after one iteration
@@ -475,12 +476,12 @@ cleanup() {
   fi
   sleep 1s
 
-  rm $TMP_DEVFILE
-  rm $TMP_PROJECTS
-  rm $TMP_DEVWORKSPACE
+  rm "$TMP_DEVFILE"
+  rm "$TMP_PROJECTS"
+  rm "$TMP_DEVWORKSPACE"
   if [ -n "${OVERRIDE_IMAGE}" ]; then
-    rm $TMP_EDITOR_DEF
-    rm $TMP_DWT
+    rm "$TMP_EDITOR_DEF"
+    rm "$TMP_DWT"
   fi
 }
 
