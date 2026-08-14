@@ -58,7 +58,7 @@ Automated validation tool for testing DevWorkspace instances on OpenShift cluste
    - Iterates through devfiles × images matrix
    - For each combination: creates DevWorkspace, waits for Running state, validates, records results
 5. **Cleanup**: Deletes DevWorkspace and temporary files (skipped in debug mode)
-6. **Summary Report**: Shows test counts, success/failure, elapsed time, and lists failed tests
+6. **Summary Report**: Shows test counts, success/failure/excluded, elapsed time, and lists failed tests
 
 ### Command-Line Flags
 
@@ -81,21 +81,24 @@ Each scenario in `settings/settings-<SCENARIO>.env` exports:
 - `PROJECT_URL`: Git repository URL (must include surrounding double quotes)
 - `EDITOR_DEFINITION`: URL to the editor definition YAML
 - `EDITOR_COMPONENT_NAME`: Component name in the editor definition that contains the editor image (used by `-i`/`-p` to replace the correct image)
+- `EXCLUDED_IMAGE_PATTERNS`: Array of Posix Extended Regular Expressions for images excluded from failure counts
 - `LANDING_PAGE_PORT`: Port to curl inside the pod to validate the editor is running
 
 #### Scenario Validation
 
 All scenarios use the same validation method: curl `localhost:${LANDING_PAGE_PORT}` inside the pod and check for HTTP 200.
 
-| Scenario | Timeout | Landing Page Port |
-|----------|---------|-------------------|
-| sshd | 60s | 3400 |
-| jetbrains | 120s | 3400 |
-| vscode | 90s | 3100 |
+| Scenario | Timeout | Landing Page Port | Editor Component |
+|----------|---------|-------------------|------------------|
+| sshd | 60s | 3400 | che-code-sshd-page |
+| jetbrains | 120s | 3400 | editor-injector |
+| vscode | 90s | 3100 | che-code-injector |
 
 ### DevWorkspace Generation
 
-Uses `devworkspace-template.yaml` as base, performs sed substitutions in two stages:
+Uses `devworkspace-template.yaml` as base. The template uses ephemeral storage (`controller.devfile.io/storage-type: ephemeral`) to avoid PVC provisioning overhead during tests.
+
+Substitutions are performed in two stages:
 
 **Stage 1** - Metadata, devfile, and projects injection:
 ```bash
@@ -121,6 +124,14 @@ The two-stage approach ensures devfile content is injected before image replacem
 
 **Editor contribution**: When using `-p` or `-i` (override image), the editor contribution switches from `uri:` to `kubernetes: name:` referencing the applied DevWorkspaceTemplate.
 
+### DevWorkspace Lifecycle Management
+
+Between tests, the script handles the workspace depending on its current state:
+
+- **Running / Starting**: Gracefully stops by patching `spec.started: false` and waiting up to `TIMEOUT/4` seconds for `Stopped` state.
+- **Failed**: Force-deletes the workspace (`oc delete dw`). A Failed workspace with CrashLoopBackOff containers can take too long to stop gracefully, which would cascade into subsequent test failures. The next `oc apply` recreates it cleanly.
+- **Stopped / not found**: Proceeds directly to `oc apply`.
+
 ### Logging and Output Control
 
 - `log()`: Outputs only when `VERBOSE=1` (set by `-v` or `-d` flags)
@@ -143,18 +154,18 @@ settings/
   settings-vscode.env     # VSCode scenario: timeout=90s, port 3100
 
 images/
-  images.txt              # Quick test list (3 UDI images: ubi8, ubi9, ubi10)
-  images-full.txt         # Complete test matrix (UDI, base-developer-image, and UBI variants)
+  images.txt              # Default test list (3 UDI images: ubi8, ubi9, ubi10)
+  images-full.txt         # Complete test matrix (227 images including UDI, base-developer-image, and UBI variants)
 
 devfiles/
-  devfiles.txt            # Quick test list (nodejs, go, php-laravel, python)
+  devfiles.txt            # Default test list (nodejs, go, php-laravel, python, java-quarkus)
   devfiles-full.txt       # Complete devfile list (32 devfiles from devfile registry)
 
 samples/
   samples.txt             # Sample project URLs (currently unused)
   samples-full.txt        # Extended sample project list (currently unused)
 
-devworkspace-template.yaml  # Base template with placeholders
+devworkspace-template.yaml  # Base template with placeholders (ephemeral storage)
 dw-auto-validate.sh        # Main validation orchestrator
 verify_images.sh           # Skopeo-based image accessibility checker
 ```
@@ -188,7 +199,7 @@ git:
 ```bash
 state=""
 count=0
-while [ "${state}" != "Running" ] && [ ${count} -lt ${TIMEOUT} ]; do
+while [ "${state}" != "Running" ] && [ "${state}" != "Failed" ] && [ ${count} -lt ${TIMEOUT} ]; do
   state=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.phase}')
   sleep 1s
   count=$((count+1))
@@ -197,8 +208,8 @@ done
 
 **Finding pod by DevWorkspace label**:
 ```bash
-podNameAndDWName=$(oc get pods -o 'jsonpath={range .items[*]}{.metadata.name}{","}{.metadata.labels.controller\.devfile\.io/devworkspace_name}{end}')
-podName=$(echo ${podNameAndDWName} | grep ${DEVWORKSPACE_NAME} | cut -d, -f1)
+podNameAndDWName=$(oc get pods -o 'jsonpath={range .items[*]}{.metadata.name}{","}{.metadata.labels.controller\.devfile\.io/devworkspace_name}{"\n"}{end}')
+podName=$(echo "${podNameAndDWName}" | grep ${DEVWORKSPACE_NAME} | cut -d, -f1)
 ```
 
 **Getting main container name** (from pod status, excluding `che-*` containers):
@@ -209,5 +220,5 @@ mainContainerName=$(oc get pod "${podName}" -o json | jq -r '[.status.containerS
 ### Adding a New Scenario
 
 1. Create `settings/settings-<name>.env`
-2. Export required variables: `TIMEOUT`, `DEVWORKSPACE_NAME`, `PROJECT_URL`, `EDITOR_DEFINITION`, `EDITOR_COMPONENT_NAME`, `LANDING_PAGE_PORT`
+2. Export required variables: `TIMEOUT`, `DEVWORKSPACE_NAME`, `PROJECT_URL`, `EDITOR_DEFINITION`, `EDITOR_COMPONENT_NAME`, `EXCLUDED_IMAGE_PATTERNS`, `LANDING_PAGE_PORT`
 3. Update scenario selection in dw-auto-validate.sh (add option, update prompts and `-s` validation)
