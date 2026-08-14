@@ -22,15 +22,15 @@ jobs:
           - scenario: vscode
             image: ''
           - scenario: vscode
-            image: 'quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-rhel9:3.29'
+            image: 'quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-rhel9:latest'
           - scenario: sshd
             image: ''
           - scenario: sshd
-            image: 'quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-sshd-rhel9:3.29'
+            image: 'quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-sshd-rhel9:latest'
           - scenario: jetbrains
             image: ''
           - scenario: jetbrains
-            image: 'quay.io/redhat-user-workloads/devspaces-tenant/devspaces/jetbrains-ide-rhel9:3.29'
+            image: 'quay.io/redhat-user-workloads/devspaces-tenant/devspaces/jetbrains-ide-rhel9:latest'
     runs-on: ubuntu-latest
     steps:
       - name: Install oc CLI
