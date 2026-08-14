@@ -51,13 +51,13 @@ jobs:
       - name: Run Dev Spaces Auto Validation
         run: |
           if [ "${{ inputs.EDITOR_DEFINITION_SSH }}" != '' ]; then
-            sed -i "s|https://.*\.yaml|${{ inputs.EDITOR_DEFINITION }}|" settings/settings-sshd.env
+            sed -i "s|https://.*\.yaml|${{ inputs.EDITOR_DEFINITION_SSH }}|" settings/settings-sshd.env
           fi
           if [ "${{ inputs.EDITOR_DEFINITION_VSCODE }}" != '' ]; then
-            sed -i "s|https://.*\.yaml|${{ inputs.EDITOR_DEFINITION }}|" settings/settings-vscode.env
+            sed -i "s|https://.*\.yaml|${{ inputs.EDITOR_DEFINITION_VSCODE }}|" settings/settings-vscode.env
           fi
           if [ "${{ inputs.EDITOR_DEFINITION_JETBRAINS }}" != '' ]; then
-            sed -i "s|https://.*\.yaml|${{ inputs.EDITOR_DEFINITION }}|" settings/settings-jetbrains.env
+            sed -i "s|https://.*\.yaml|${{ inputs.EDITOR_DEFINITION_JETBRAINS }}|" settings/settings-jetbrains.env
           fi
           cp images/images-full.txt images/images.txt
           sed -i '/nodejs/!d' devfiles/devfiles.txt
