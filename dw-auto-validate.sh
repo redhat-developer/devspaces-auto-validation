@@ -125,7 +125,7 @@ validate_devworkspace() {
 }
 
 shouldExclude() {
-  for imagePattern in ${EXCLUDED_IMAGE_PATTERNS[@]}; do
+  for imagePattern in "${EXCLUDED_IMAGE_PATTERNS[@]}"; do
     if [[ ${1} =~ ${imagePattern} ]]; then
       return 0
     fi
@@ -397,7 +397,11 @@ PROJEOF
     eval "sed \"s|image: .*|image: ${image}|\" > ${TMP_DEVWORKSPACE}"
     # Stop the DevWorkspace before applying to force a pod restart
     current_phase=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.phase}' 2>/dev/null)
-    if [ "${current_phase}" == "Running" ] || [ "${current_phase}" == "Starting" ] || [ "${current_phase}" == "Failed" ]; then
+    if [ "${current_phase}" == "Failed" ]; then
+      log -n "Force-deleting ${DEVWORKSPACE_NAME} (Failed state) ."
+      eval "oc delete dw ${DEVWORKSPACE_NAME} ${QUIET}"
+      log " deleted."
+    elif [ "${current_phase}" == "Running" ] || [ "${current_phase}" == "Starting" ]; then
       eval "oc patch dw ${DEVWORKSPACE_NAME} --type merge -p '{\"spec\":{\"started\":false}}' ${QUIET}"
       log -n "Stopping ${DEVWORKSPACE_NAME} ."
       stop_count=0
@@ -428,24 +432,18 @@ PROJEOF
     if [ "${state}" == "Running" ]; then
       log "\n${GREEN}${DEVWORKSPACE_NAME} is running.${NC}"
     else
-<<<<<<< Upstream, based on main
-      log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start${NC}"
-      if shouldExclude ${image}; then
+      if [ "${state}" == "Failed" ]; then
+        log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start (state: Failed after ${count}s)${NC}"
+      else
+        log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start (timed out after ${TIMEOUT}s, last state: ${state})${NC}"
+      fi
+      if shouldExclude "${image}"; then
         echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌ (EXCLUDED ↩️ )"
         excluded_test+=("Devfile '$devfile_url' using image '$image'")
       else
         echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌"
         failed_test+=("Devfile '$devfile_url' using image '$image'")
       fi
-=======
-      if [ "${state}" == "Failed" ]; then
-        log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start (state: Failed after ${count}s)${NC}"
-      else
-        log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start (timed out after ${TIMEOUT}s, last state: ${state})${NC}"
-      fi
-      echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌"
-      failed_test+=("Devfile '$devfile_url' using image '$image'")
->>>>>>> 7fab193 fix java-quarkus devfile sample.
       continue
     fi
     log "Validating ${DEVWORKSPACE_NAME} .."
@@ -454,7 +452,7 @@ PROJEOF
       echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} PASSED ✅"
       ((success_count++))
     else
-      if shouldExclude ${image}; then
+      if shouldExclude "${image}"; then
         echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌ (EXCLUDED ↩️ )"
         excluded_test+=("Devfile '$devfile_url' using image '$image'")
       else

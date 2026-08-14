@@ -7,6 +7,8 @@ spec:
   started: true
   routingClass: che # thanks claude
   template:
+    attributes:
+      controller.devfile.io/storage-type: ephemeral
     DEVFILE
     PROJECTS
 
