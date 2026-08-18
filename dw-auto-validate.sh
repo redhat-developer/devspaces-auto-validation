@@ -96,9 +96,9 @@ log() {
 # Sets global variables: podName, mainContainerName
 # Returns 1 if pod or container cannot be found.
 resolve_devworkspace_pod() {
-  podNameAndDWName=$(oc get pods -o 'jsonpath={range .items[*]}{.metadata.name}{","}{.metadata.labels.controller\.devfile\.io/devworkspace_name}{"\n"}{end}')
+  podNameAndDWName=$(oc get pods --field-selector=status.phase=Running -o 'jsonpath={range .items[*]}{.metadata.name}{","}{.metadata.labels.controller\.devfile\.io/devworkspace_name}{"\n"}{end}')
   log "${YELLOW}podNameAndDWName: \n${NC}${podNameAndDWName}"
-  podName=$(echo "${podNameAndDWName}" | grep ${DEVWORKSPACE_NAME} | cut -d, -f1)
+  podName=$(echo "${podNameAndDWName}" | grep ${DEVWORKSPACE_NAME} | head -1 | cut -d, -f1)
   log "${YELLOW}podName: \n${NC}${podName}"
   mainContainerName=$(oc get pod "${podName}" -o json | jq -r '[.status.containerStatuses[] | select(.state.running and (.name | test("^che-") | not))] | first | .name // empty')
   log "${YELLOW}mainContainerName: \n${NC}${mainContainerName}"
@@ -110,17 +110,33 @@ resolve_devworkspace_pod() {
   return 0
 }
 
-validate_devworkspace() {
-  resolve_devworkspace_pod || return 1
-
-  log "Checking editor on localhost:${LANDING_PAGE_PORT}"
-  http_code=$(oc exec -n "${DEVWORKSPACE_NS}" "${podName}" -c "${mainContainerName}" -- curl -s -o /dev/null -w '%{http_code}' http://localhost:${LANDING_PAGE_PORT})
-  if [ "${http_code}" == "200" ]; then
-    log "${GREEN}localhost:${VALIDATION_PORT} returned HTTP ${http_code}${NC}"
-    return 0
-  else
-    log "${YELLOW}localhost:${VALIDATION_PORT} returned HTTP ${http_code}${NC}"
-    return 1
+# Stops or deletes the current DevWorkspace to prepare for the next test.
+cleanup_test() {
+  [ ${DEBUG} -eq 1 ] && log "\n${YELLOW}Debug mode:${NC} Skipping test cleanup, DevWorkspace (${DEVWORKSPACE_NAME}) not deleted." && return 0
+  current_phase=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.phase}' 2>/dev/null)
+  if [ "${current_phase}" == "Failed" ]; then
+    log -n "Force-deleting ${DEVWORKSPACE_NAME} (Failed state) "
+    oc delete dw ${DEVWORKSPACE_NAME} &>/dev/null
+    # wait for pods to fully terminate before next test
+    while oc get pods -l "controller.devfile.io/devworkspace_name=${DEVWORKSPACE_NAME}" --no-headers 2>/dev/null | grep -q .; do
+      sleep 1s
+      log -n "."
+    done
+    log " deleted."
+  elif [ "${current_phase}" == "Running" ] || [ "${current_phase}" == "Starting" ]; then
+    eval "oc patch dw ${DEVWORKSPACE_NAME} --type merge -p '{\"spec\":{\"started\":false}}' ${QUIET}"
+    log -n "Stopping ${DEVWORKSPACE_NAME} ."
+    stop_count=0
+    stop_timeout=$((TIMEOUT / 4))
+    while [ "$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.phase}' 2>/dev/null)" != "Stopped" ] && [ ${stop_count} -lt ${stop_timeout} ]; do
+      sleep 1s
+      log -n "."
+      stop_count=$((stop_count+1))
+    done
+    if [ ${stop_count} -ge ${stop_timeout} ]; then
+      log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to stop (timed out after ${stop_timeout}s)${NC}"
+    fi
+    log " stopped."
   fi
 }
 
@@ -395,30 +411,6 @@ PROJEOF
     # Modify the result (must be separate)
     # here is the replacement of the container image used in the devfile from an image in the list
     eval "sed \"s|image: .*|image: ${image}|\" > ${TMP_DEVWORKSPACE}"
-    # Stop the DevWorkspace before applying to force a pod restart
-    current_phase=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.phase}' 2>/dev/null)
-    if [ "${current_phase}" == "Failed" ]; then
-      log -n "Force-deleting ${DEVWORKSPACE_NAME} (Failed state) ."
-      eval "oc delete dw ${DEVWORKSPACE_NAME} ${QUIET}"
-      log " deleted."
-    elif [ "${current_phase}" == "Running" ] || [ "${current_phase}" == "Starting" ]; then
-      eval "oc patch dw ${DEVWORKSPACE_NAME} --type merge -p '{\"spec\":{\"started\":false}}' ${QUIET}"
-      log -n "Stopping ${DEVWORKSPACE_NAME} ."
-      stop_count=0
-      stop_timeout=$((TIMEOUT / 4))
-      while [ "$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.phase}' 2>/dev/null)" != "Stopped" ] && [ ${stop_count} -lt ${stop_timeout} ]; do
-        sleep 1s
-        log -n "."
-        stop_count=$((stop_count+1))
-      done
-      if [ ${stop_count} -ge ${stop_timeout} ]; then
-        log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to stop (timed out after ${stop_timeout}s)${NC}"
-        echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌"
-        failed_test+=("Devfile '$devfile_url' using image '$image'")
-        continue
-      fi
-      log " stopped."
-    fi
     eval "oc apply -f ${TMP_DEVWORKSPACE} ${QUIET}"
     state=""
     log -n "Waiting for ${DEVWORKSPACE_NAME} to run ."
@@ -433,7 +425,9 @@ PROJEOF
       log "\n${GREEN}${DEVWORKSPACE_NAME} is running.${NC}"
     else
       if [ "${state}" == "Failed" ]; then
+        dw_message=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.message}' 2>/dev/null)
         log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start (state: Failed after ${count}s)${NC}"
+        log "${RED}Reason: ${dw_message}${NC}"
       else
         log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start (timed out after ${TIMEOUT}s, last state: ${state})${NC}"
       fi
@@ -444,6 +438,7 @@ PROJEOF
         echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌"
         failed_test+=("Devfile '$devfile_url' using image '$image'")
       fi
+      cleanup_test
       continue
     fi
     log "Validating ${DEVWORKSPACE_NAME} .."
@@ -460,15 +455,16 @@ PROJEOF
         failed_test+=("Devfile '$devfile_url' using image '$image'")
       fi
     fi
+    cleanup_test
     sleep 1s
   done # image loop
   [[ ${DEBUG} -eq 1 && ${total_count} -ge 1 ]] && break
 done # devfile loop
 
-# cleanup
-cleanup() {
+# cleanup suite: delete remote resources and temporary files
+cleanup_suite() {
   echo -e "\n${BLUE}Cleaning up resources...${NC}"
-  eval "oc delete dw ${DEVWORKSPACE_NAME} ${QUIET}"
+  eval "oc delete dw ${DEVWORKSPACE_NAME} 2>/dev/null ${QUIET}"
   if [ -n "${OVERRIDE_IMAGE}" ]; then
     eval "oc delete devworkspacetemplate ${EDITOR_DWT_NAME} ${QUIET}"
   fi
@@ -484,7 +480,7 @@ cleanup() {
 }
 
 if [ ${DEBUG} -eq 0 ]; then
-  cleanup
+  cleanup_suite
 else
   EXTRA_MSG=""
   [ -n "${OVERRIDE_IMAGE}" ] && EXTRA_MSG="\nTemporary editor definition file (${TMP_EDITOR_DEF}) not deleted\nTemporary devworkspace template file (${TMP_DWT}) not deleted\nRemote DevworkspaceTemplate (${EDITOR_DWT_NAME}) not deleted"

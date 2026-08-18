@@ -82,17 +82,17 @@ Each scenario in `settings/settings-<SCENARIO>.env` exports:
 - `EDITOR_DEFINITION`: URL to the editor definition YAML
 - `EDITOR_COMPONENT_NAME`: Component name in the editor definition that contains the editor image (used by `-i`/`-p` to replace the correct image)
 - `EXCLUDED_IMAGE_PATTERNS`: Array of Posix Extended Regular Expressions for images excluded from failure counts
-- `LANDING_PAGE_PORT`: Port to curl inside the pod to validate the editor is running
+- `validate_devworkspace()`: Function that evaluates whether the DevWorkspace is valid (scenario-specific checks)
 
 #### Scenario Validation
 
-All scenarios use the same validation method: curl `localhost:${LANDING_PAGE_PORT}` inside the pod and check for HTTP 200.
+Each scenario defines its own `validate_devworkspace()` function with checks tailored to its editor:
 
-| Scenario | Timeout | Landing Page Port | Editor Component |
+| Scenario | Timeout | Validation Checks | Editor Component |
 |----------|---------|-------------------|------------------|
-| sshd | 60s | 3400 | che-code-sshd-page |
-| jetbrains | 120s | 3400 | editor-injector |
-| vscode | 90s | 3100 | che-code-injector |
+| sshd | 60s | HTTP check on port 3400 via `oc exec` curl (`-m 5`) + `/tmp/sshd.log` for `Server listening on` | che-code-sshd-page |
+| jetbrains | 120s | HTTP check on port 3400 via `oc exec` curl (`-m 5`) | editor-injector |
+| vscode | 120s | HTTP check on port 3100 via `oc exec` curl (`-m 5`), dumps `/checode/entrypoint-logs.txt` on failure | che-code-injector |
 
 ### DevWorkspace Generation
 
@@ -126,11 +126,16 @@ The two-stage approach ensures devfile content is injected before image replacem
 
 ### DevWorkspace Lifecycle Management
 
-Between tests, the script handles the workspace depending on its current state:
+After each test, `cleanup_test()` handles the workspace depending on its current state:
 
 - **Running / Starting**: Gracefully stops by patching `spec.started: false` and waiting up to `TIMEOUT/4` seconds for `Stopped` state.
-- **Failed**: Force-deletes the workspace (`oc delete dw`). A Failed workspace with CrashLoopBackOff containers can take too long to stop gracefully, which would cascade into subsequent test failures. The next `oc apply` recreates it cleanly.
-- **Stopped / not found**: Proceeds directly to `oc apply`.
+- **Failed**: Force-deletes the workspace (`oc delete dw`) and waits for all associated pods to terminate before returning. This prevents stale pods from interfering with the next test's pod resolution.
+- **Stopped / not found**: No action needed.
+- **Debug mode**: `cleanup_test()` is skipped entirely to allow resource inspection.
+
+At the end of the suite, `cleanup_suite()` deletes the DevWorkspace, any override DevWorkspaceTemplate, and temporary files (skipped in debug mode).
+
+When a DevWorkspace fails to start, the script logs the failure reason from `.status.message`.
 
 ### Logging and Output Control
 
@@ -154,12 +159,12 @@ settings/
   settings-vscode.env     # VSCode scenario: timeout=90s, port 3100
 
 images/
-  images.txt              # Default test list (3 UDI images: ubi8, ubi9, ubi10)
+  images.txt              # Default test list (UDI images: ubi8, ubi9, ubi10)
   images-full.txt         # Complete test matrix (227 images including UDI, base-developer-image, and UBI variants)
 
 devfiles/
-  devfiles.txt            # Default test list (nodejs, go, php-laravel, python, java-quarkus)
-  devfiles-full.txt       # Complete devfile list (32 devfiles from devfile registry)
+  devfiles.txt            # Default test list (nodejs)
+  devfiles-full.txt       # Complete devfile list (32 devfiles from devfile registry including java-quarkus, ollama, openclaw, picoclaw, zeroclaw)
 
 samples/
   samples.txt             # Sample project URLs (currently unused)
@@ -174,13 +179,9 @@ verify_images.sh           # Skopeo-based image accessibility checker
 
 ### Validation Function
 
-A single `validate_devworkspace()` function in the main script handles all scenarios:
+Each scenario defines its own `validate_devworkspace()` function in its settings file. All scenarios call `resolve_devworkspace_pod()` to set `podName` and `mainContainerName` globals, then perform scenario-specific checks (landing page HTTP check, log file scraping, or both).
 
-1. Calls `resolve_devworkspace_pod()` to set `podName` and `mainContainerName` globals
-2. Curls `localhost:${LANDING_PAGE_PORT}` inside the pod container
-3. Returns 0 if HTTP 200, 1 otherwise
-
-`resolve_devworkspace_pod()` finds the pod by DevWorkspace label and selects the main container from pod status, filtering out containers whose name starts with `che-`.
+`resolve_devworkspace_pod()` finds the pod by DevWorkspace label (filtering for `status.phase=Running` to exclude terminating pods) and selects the main container from pod status, filtering out containers whose name starts with `che-`.
 
 ### Variable Quoting Requirements
 
@@ -206,10 +207,10 @@ while [ "${state}" != "Running" ] && [ "${state}" != "Failed" ] && [ ${count} -l
 done
 ```
 
-**Finding pod by DevWorkspace label**:
+**Finding pod by DevWorkspace label** (filtered to Running pods only):
 ```bash
-podNameAndDWName=$(oc get pods -o 'jsonpath={range .items[*]}{.metadata.name}{","}{.metadata.labels.controller\.devfile\.io/devworkspace_name}{"\n"}{end}')
-podName=$(echo "${podNameAndDWName}" | grep ${DEVWORKSPACE_NAME} | cut -d, -f1)
+podNameAndDWName=$(oc get pods --field-selector=status.phase=Running -o 'jsonpath={range .items[*]}{.metadata.name}{","}{.metadata.labels.controller\.devfile\.io/devworkspace_name}{"\n"}{end}')
+podName=$(echo "${podNameAndDWName}" | grep ${DEVWORKSPACE_NAME} | head -1 | cut -d, -f1)
 ```
 
 **Getting main container name** (from pod status, excluding `che-*` containers):
@@ -220,5 +221,6 @@ mainContainerName=$(oc get pod "${podName}" -o json | jq -r '[.status.containerS
 ### Adding a New Scenario
 
 1. Create `settings/settings-<name>.env`
-2. Export required variables: `TIMEOUT`, `DEVWORKSPACE_NAME`, `PROJECT_URL`, `EDITOR_DEFINITION`, `EDITOR_COMPONENT_NAME`, `EXCLUDED_IMAGE_PATTERNS`, `LANDING_PAGE_PORT`
+2. Export required variables: `TIMEOUT`, `DEVWORKSPACE_NAME`, `PROJECT_URL`, `EDITOR_DEFINITION`, `EDITOR_COMPONENT_NAME`, `EXCLUDED_IMAGE_PATTERNS`
+3. Define a `validate_devworkspace()` function with scenario-specific validation checks
 3. Update scenario selection in dw-auto-validate.sh (add option, update prompts and `-s` validation)
