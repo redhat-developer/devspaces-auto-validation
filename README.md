@@ -70,7 +70,7 @@ Automated validation tool for testing DevWorkspace instances on OpenShift cluste
 - `-i <IMAGE>`: Test a custom editor image — same mechanism as `-p` but with an arbitrary image reference (mutually exclusive with `-p`)
 - `-h`: Help - displays usage information
 
-**Debug mode specifics**: Sets `DEBUG=1`, `FULL=0`, `VERBOSE=1`, runs only the first test iteration (`[[ ${DEBUG} -eq 1 && ${total_count} == 1 ]] && continue`), skips cleanup to allow resource inspection.
+**Debug mode specifics**: Sets `DEBUG=1`, `FULL=0`, `VERBOSE=1`, runs only the first test iteration (`[[ ${DEBUG} -eq 1 && ${total_count} -ge 1 ]] && break`), skips cleanup to allow resource inspection.
 
 ### Scenarios
 
@@ -90,9 +90,11 @@ Each scenario defines its own `validate_devworkspace()` function with checks tai
 
 | Scenario | Timeout | Validation Checks | Editor Component |
 |----------|---------|-------------------|------------------|
-| sshd | 60s | HTTP check on port 3400 via `oc exec` curl (`-m 5`) + `/tmp/sshd.log` for `Server listening on` | che-code-sshd-page |
-| jetbrains | 120s | HTTP check on port 3400 via `oc exec` curl (`-m 5`) | editor-injector |
-| vscode | 120s | HTTP check on port 3100 via `oc exec` curl (`-m 5`), dumps `/checode/entrypoint-logs.txt` on failure | che-code-injector |
+| sshd | 60s | HTTP 200 on port 3400 via `oc exec` curl (`-m 5`), then `/tmp/sshd.log` for `Server listening on`; on failure dumps `/proc/net/tcp{,6}` via `proc_tcp` for socket diagnostics | che-code-sshd-page |
+| jetbrains | 120s | HTTP 200 on port 3400 via `oc exec` curl (`-m 5`) | editor-injector |
+| vscode | 120s | HTTP 200 on port 3100 via `oc exec` curl (`-m 5`), dumps `/checode/entrypoint-logs.txt` on failure | che-code-injector |
+
+All scenarios use `oc exec` with in-pod `curl` for validation (no port-forwarding). `validate_devworkspace()` takes no arguments — it uses global variables set by the main loop.
 
 ### DevWorkspace Generation
 
@@ -120,6 +122,8 @@ eval "sed \"s|image: .*|image: ${image}|\" > ${TMP_DEVWORKSPACE}"
 
 The two-stage approach ensures devfile content is injected before image replacement.
 
+**Devfile fetch**: Each devfile URL is fetched with `curl` and the HTTP status code is checked. If the fetch fails (non-200), the devfile is skipped and recorded as a failure.
+
 **Projects handling**: If the devfile contains `starterProjects`, those are extracted and converted into a `projects:` block. Otherwise, the scenario's `PROJECT_URL` is used as a fallback sample project.
 
 **Editor contribution**: When using `-p` or `-i` (override image), the editor contribution switches from `uri:` to `kubernetes: name:` referencing the applied DevWorkspaceTemplate.
@@ -133,9 +137,11 @@ After each test, `cleanup_test()` handles the workspace depending on its current
 - **Stopped / not found**: No action needed.
 - **Debug mode**: `cleanup_test()` is skipped entirely to allow resource inspection.
 
+`cleanup_test()` runs after every test iteration (both pass and fail paths), not just at the end of the suite.
+
 At the end of the suite, `cleanup_suite()` deletes the DevWorkspace, any override DevWorkspaceTemplate, and temporary files (skipped in debug mode).
 
-When a DevWorkspace fails to start, the script logs the failure reason from `.status.message`.
+The wait loop now detects both `Running` and `Failed` states, breaking early on failure instead of waiting for the full timeout. When a DevWorkspace fails to start, the script logs the failure reason from `.status.message`.
 
 ### Logging and Output Control
 
@@ -156,15 +162,15 @@ Tracks test execution time using bash's `$SECONDS` variable:
 settings/
   settings-sshd.env       # SSHD scenario: timeout=60s, port 3400
   settings-jetbrains.env  # JetBrains scenario: timeout=120s, port 3400
-  settings-vscode.env     # VSCode scenario: timeout=90s, port 3100
+  settings-vscode.env     # VSCode scenario: timeout=120s, port 3100
 
 images/
   images.txt              # Default test list (UDI images: ubi8, ubi9, ubi10)
-  images-full.txt         # Complete test matrix (227 images including UDI, base-developer-image, and UBI variants)
+  images-full.txt         # Complete test matrix (227 images including UDI, base-developer-image, and UBI 8/9/10 variants)
 
 devfiles/
-  devfiles.txt            # Default test list (nodejs)
-  devfiles-full.txt       # Complete devfile list (32 devfiles from devfile registry including java-quarkus, ollama, openclaw, picoclaw, zeroclaw)
+  devfiles.txt            # Default test list (nodejs, go, php-laravel, python, java-maven)
+  devfiles-full.txt       # Complete devfile list (30 devfiles from devfile registry including java-maven, ollama, openclaw, picoclaw, zeroclaw)
 
 samples/
   samples.txt             # Sample project URLs (currently unused)
@@ -196,7 +202,7 @@ git:
 
 ### Common DevWorkspace Patterns
 
-**Waiting for Running state**:
+**Waiting for Running or Failed state**:
 ```bash
 state=""
 count=0
@@ -206,6 +212,8 @@ while [ "${state}" != "Running" ] && [ "${state}" != "Failed" ] && [ ${count} -l
   count=$((count+1))
 done
 ```
+
+The loop exits early on `Failed` state, avoiding unnecessary waits for workspaces that will never start.
 
 **Finding pod by DevWorkspace label** (filtered to Running pods only):
 ```bash

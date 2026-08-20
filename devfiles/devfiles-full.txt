@@ -3,7 +3,6 @@ https://registry.devfile.io/devfiles/go
 https://registry.devfile.io/devfiles/java-maven
 https://registry.devfile.io/devfiles/java-openliberty
 https://registry.devfile.io/devfiles/java-openliberty-gradle
-https://registry.devfile.io/devfiles/java-quarkus
 https://registry.devfile.io/devfiles/java-springboot
 https://registry.devfile.io/devfiles/java-vertx
 https://registry.devfile.io/devfiles/java-websphereliberty
