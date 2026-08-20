@@ -1,1 +1,5 @@
 https://registry.devfile.io/devfiles/nodejs
+https://registry.devfile.io/devfiles/go
+https://registry.devfile.io/devfiles/php-laravel
+https://registry.devfile.io/devfiles/python
+https://registry.devfile.io/devfiles/java-maven
