@@ -14,6 +14,31 @@ BLUE='\033[1;94m'
 PURPLE='\033[1;95m'
 NC='\033[0m' # No Color
 
+# Log file: always captures verbose-level output
+LOG_FILE=$(mktemp /tmp/dw-auto-validate-XXXXXX.log)
+
+# -f flag forces output to console regardless of verbose mode
+log() {
+  local force=0
+  if [ "$1" = "-f" ]; then
+    force=1
+    shift
+  fi
+  if [ ${VERBOSE} -eq 1 ] || [ ${force} -eq 1 ]; then
+    echo -e "${@}"
+  fi
+  echo -e "${@}" >> "${LOG_FILE}"
+}
+
+run_cmd() {
+  if [ ${VERBOSE} -eq 1 ]; then
+    "$@" 2>&1 | tee -a "${LOG_FILE}"
+    return "${PIPESTATUS[0]}"
+  else
+    "$@" >> "${LOG_FILE}" 2>&1
+  fi
+}
+
 
 #################################
 # Parameters for fun or experts #
@@ -23,37 +48,37 @@ while getopts "vfdhs:p:i:" o; do
   case "${o}" in
     v)
     VERBOSE=1
-    echo "Using verbose mode."
+    log -f "Using verbose mode."
     ;;
     f)
     FULL=1
-    echo -e "Using full test matrix. ${YELLOW}WARNING${NC} - Can take a long time to complete."
+    log -f "Using full test matrix. ${YELLOW}WARNING${NC} - Can take a long time to complete."
     ;;
     d)
     DEBUG=1
     FULL=0
     VERBOSE=1
-    echo -e "Using verbose mode AND do not clean resource. ${YELLOW}WARNING${NC} - This mode uses only the first item of the test matrix."
+    log -f "Using verbose mode AND do not clean resource. ${YELLOW}WARNING${NC} - This mode uses only the first item of the test matrix."
     ;;
     s)
     SCENARIO="${OPTARG}"
     if [[ ! "${SCENARIO}" =~ ^(sshd|jetbrains|vscode)$ ]]; then
-      echo -e "${RED}Error:${NC} Invalid scenario '${SCENARIO}'. Valid options are: sshd, jetbrains, vscode." >&2
+      log -f "${RED}Error:${NC} Invalid scenario '${SCENARIO}'. Valid options are: sshd, jetbrains, vscode." >&2
       exit 1
     fi
-    echo "Using '${SCENARIO}' scenario."
+    log -f "Using '${SCENARIO}' scenario."
     ;;
     p)
     PR_NUMBER="${OPTARG}"
     if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
-      echo -e "${RED}Error:${NC} PR number must be a positive integer." >&2
+      log -f "${RED}Error:${NC} PR number must be a positive integer." >&2
       exit 1
     fi
-    echo -e "Using che-code image from PR #${PR_NUMBER}."
+    log -f "Using che-code image from PR #${PR_NUMBER}."
     ;;
     i)
     CUSTOM_IMAGE="${OPTARG}"
-    echo -e "Using custom editor image: ${CUSTOM_IMAGE}"
+    log -f "Using custom editor image: ${CUSTOM_IMAGE}"
     ;;
     h)
     echo -e "Usage: $0 [OPTIONS]\n"
@@ -68,29 +93,20 @@ while getopts "vfdhs:p:i:" o; do
     exit 0
     ;;
     \?)
-    echo "Invalid option: -$OPTARG"
+    log -f "Invalid option: -$OPTARG"
     ;;
   esac
 done
 
 # -p and -i are mutually exclusive
 if [ -n "${PR_NUMBER}" ] && [ -n "${CUSTOM_IMAGE}" ]; then
-  echo -e "${RED}Error:${NC} -p and -i options are mutually exclusive." >&2
+  log -f "${RED}Error:${NC} -p and -i options are mutually exclusive." >&2
   exit 1
 fi
-
-# quiet logs from oc
-[[ ${VERBOSE} -eq 0 ]] && QUIET="&>/dev/null"
 
 ####################
 # Common Functions #
 ####################
-
-log() {
-  if [ ${VERBOSE} -eq 1 ]; then
-    echo -e "${@}"
-  fi
-}
 
 # Resolves the pod name and main container name for the current DevWorkspace.
 # Sets global variables: podName, mainContainerName
@@ -124,55 +140,55 @@ shouldExclude() {
 ########
 
 # oc must be installed
-echo -e "\n${BLUE}Checking oc installation...${NC}"
+log -f "\n${BLUE}Checking oc installation...${NC}"
 log "Executing 'which oc'..."
 if ! [ -x "$(command -v oc)" ]; then
-  echo -e "${RED}Error:${NC} oc is not installed. Please install oc CLI. You can find a getting started guide here: https://docs.redhat.com/en/documentation/openshift_container_platform/latest/html/cli_tools/openshift-cli-oc" >&2
+  log -f "${RED}Error:${NC} oc is not installed. Please install oc CLI. You can find a getting started guide here: https://docs.redhat.com/en/documentation/openshift_container_platform/latest/html/cli_tools/openshift-cli-oc" >&2
   exit 1
 else
-  echo -e "${GREEN}Ok!${NC}"
+  log -f "${GREEN}Ok!${NC}"
 fi
 
 # jq must be installed
-echo -e "\n${BLUE}Checking jq installation...${NC}"
+log -f "\n${BLUE}Checking jq installation...${NC}"
 log "Executing 'which jq'..."
 if ! [ -x "$(command -v jq)" ]; then
-  echo -e "${RED}Error:${NC} jq is not installed. Please install jq package." >&2
+  log -f "${RED}Error:${NC} jq is not installed. Please install jq package." >&2
   exit 1
 else
-  echo -e "${GREEN}Ok!${NC}"
+  log -f "${GREEN}Ok!${NC}"
 fi
 
 if [ -n "${PR_NUMBER}" ]; then
   # Verify the PR image exists
   PR_IMAGE="quay.io/che-incubator-pull-requests/che-code:pr-${PR_NUMBER}-amd64"
-  echo -e "\n${BLUE}Checking skopeo installation...${NC}"
+  log -f "\n${BLUE}Checking skopeo installation...${NC}"
   log "Executing 'which skopeo'..."
   if ! [ -x "$(command -v skopeo)" ]; then
-    echo -e "${RED}Error:${NC} skopeo is not installed. Please install skopeo package." >&2
+    log -f "${RED}Error:${NC} skopeo is not installed. Please install skopeo package." >&2
     exit 1
   else
-    echo -e "${GREEN}Ok!${NC}"
-    echo -e "\n${BLUE}Checking PR image...${NC}"
+    log -f "${GREEN}Ok!${NC}"
+    log -f "\n${BLUE}Checking PR image...${NC}"
     log "Executing 'skopeo inspect'..."
-    eval skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${PR_IMAGE}" ${QUIET}
+    run_cmd skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${PR_IMAGE}"
     if [ $? -ne 0 ]; then
-      echo -e "${RED}Error:${NC} PR image '${PR_IMAGE}' not found. Make sure the GitHub Action has published the image." >&2
+      log -f "${RED}Error:${NC} PR image '${PR_IMAGE}' not found. Make sure the GitHub Action has published the image." >&2
       exit 1
     fi
-    echo -e "${GREEN}Ok!${NC}"
+    log -f "${GREEN}Ok!${NC}"
   fi
 fi
 
 if [ -n "${CUSTOM_IMAGE}" ]; then
   if [ -x "$(command -v skopeo)" ]; then
-    echo -e "\n${BLUE}Checking custom image...${NC}"
+    log -f "\n${BLUE}Checking custom image...${NC}"
     log "Executing 'skopeo inspect'..."
-    eval skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${CUSTOM_IMAGE}" ${QUIET}
+    run_cmd skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${CUSTOM_IMAGE}"
     if [ $? -ne 0 ]; then
-      echo -e "${YELLOW}Warning:${NC} Could not verify custom image '${CUSTOM_IMAGE}'. Proceeding anyway."
+      log -f "${YELLOW}Warning:${NC} Could not verify custom image '${CUSTOM_IMAGE}'. Proceeding anyway."
     else
-      echo -e "${GREEN}Ok!${NC}"
+      log -f "${GREEN}Ok!${NC}"
     fi
   fi
 fi
@@ -185,12 +201,12 @@ elif [ -n "${CUSTOM_IMAGE}" ]; then
 fi
 
 # You must be logged into your OpenShift Cluster
-echo -e "\n${BLUE}Checking cluster connection...${NC}"
+log -f "\n${BLUE}Checking cluster connection...${NC}"
 log "Executing 'oc whoami'..."
 current_cluster=$(oc config current-context)
-eval oc whoami --insecure-skip-tls-verify ${QUIET}
+run_cmd oc whoami --insecure-skip-tls-verify
 if [ $? -eq 1 ]; then
-  echo -e "${YELLOW}Not connected.${NC} Do you want to login to current cluster? Current cluster is ${PURPLE}${current_cluster}.${NC}"
+  log -f "${YELLOW}Not connected.${NC} Do you want to login to current cluster? Current cluster is ${PURPLE}${current_cluster}.${NC}"
   while true; do
     read -p "(y/n)? : " yn
     case $yn in
@@ -200,12 +216,12 @@ if [ $? -eq 1 ]; then
     esac
   done
 else
-  echo -e "${GREEN}Ok!${NC}\nUsing current context ${PURPLE}${current_cluster}${NC}"
+  log -f "${GREEN}Ok!${NC}\nUsing current context ${PURPLE}${current_cluster}${NC}"
 fi
 
 # Choose scenario
 if [ -z "${SCENARIO}" ]; then
-  echo -e "\n${BLUE}Choose the dedicated scenario to run the validation test suite.${NC}\n1-sshd\n2-jetbrains\n3-vscode"
+  log -f "\n${BLUE}Choose the dedicated scenario to run the validation test suite.${NC}\n1-sshd\n2-jetbrains\n3-vscode"
   while true; do
     read -p "(1/2/3)? : " scenario
     case $scenario in
@@ -226,12 +242,12 @@ DEVWORKSPACE_NS=$(oc project -q)
 # Override image mode: override the editor definition with a custom or PR image
 EDITOR_DWT_NAME=""
 if [ -n "${OVERRIDE_IMAGE}" ]; then
-  echo -e "\n${BLUE}Setting up editor definition from override image: ${OVERRIDE_IMAGE}${NC}"
+  log -f "\n${BLUE}Setting up editor definition from override image: ${OVERRIDE_IMAGE}${NC}"
 
   TMP_EDITOR_DEF=$(mktemp -t editor-def-XXX.yaml)
   curl -sL -o "${TMP_EDITOR_DEF}" "${EDITOR_DEFINITION}"
 
-  sed -i.bak "/name: ${EDITOR_COMPONENT_NAME}/,/image:/ s|image:.*|image: ${OVERRIDE_IMAGE}|" "${TMP_EDITOR_DEF}" && rm -f "${TMP_EDITOR_DEF}.bak" 
+  sed -i.bak "/name: ${EDITOR_COMPONENT_NAME}/,/image:/ s|image:.*|image: ${OVERRIDE_IMAGE}|" "${TMP_EDITOR_DEF}" && rm -f "${TMP_EDITOR_DEF}.bak"
 
   if [ -n "${PR_NUMBER}" ]; then
     EDITOR_DWT_NAME="che-code-pr-${PR_NUMBER}"
@@ -250,12 +266,12 @@ $(sed -n '/^commands:/,$ p' "${TMP_EDITOR_DEF}" | sed 's/^/  /')
 DWTEOF
 
   log "Applying DevWorkspaceTemplate ${EDITOR_DWT_NAME}..."
-  eval "oc apply -f ${TMP_DWT} ${QUIET}"
+  run_cmd oc apply -f "${TMP_DWT}"
   if [ $? -ne 0 ]; then
-    echo -e "${RED}Error:${NC} Failed to apply DevWorkspaceTemplate." >&2
+    log -f "${RED}Error:${NC} Failed to apply DevWorkspaceTemplate." >&2
     exit 1
   fi
-  echo -e "${GREEN}DevWorkspaceTemplate ${EDITOR_DWT_NAME} applied.${NC}"
+  log -f "${GREEN}DevWorkspaceTemplate ${EDITOR_DWT_NAME} applied.${NC}"
 fi
 
 # Temporary storage for generated files
@@ -298,7 +314,7 @@ done < ${DEVFILE_LIST_PATH}
 
 #Run the tests now that everything is set up
 CURRENT_SERVER=$(oc whoami --show-server)
-echo -e "\n${BLUE}Running test scenario '${SCENARIO}' using ${DEVWORKSPACE_NAME} devworkspace in ${DEVWORKSPACE_NS} namespace against server ${CURRENT_SERVER}...${NC}"
+log -f "\n${BLUE}Running test scenario '${SCENARIO}' using ${DEVWORKSPACE_NAME} devworkspace in ${DEVWORKSPACE_NS} namespace against server ${CURRENT_SERVER}...${NC}"
 
 failed_test=()
 success_count=0
@@ -316,11 +332,11 @@ else
 fi
 
 # echo numbers of tests that will be ran
-echo -e "${BLUE}There will be ${total_tests} tests performed in total.${NC}"
+log -f "${BLUE}There will be ${total_tests} tests performed in total.${NC}"
 
 for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
   curl -sL -o ${TMP_DEVFILE} ${devfile_url}
-  sed -i.tmp 's/^/    /' ${TMP_DEVFILE} && rm -f "${TMP_DEVFILE}.tmp" 
+  sed -i.tmp 's/^/    /' ${TMP_DEVFILE} && rm -f "${TMP_DEVFILE}.tmp"
 
   for image in "${IMAGES_LIST[@]}"; do
     #debug mode: stop after one iteration
@@ -328,13 +344,13 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
     log "\n${BLUE}Begin test of ${devfile_url} with ${image}${NC}"
     ((total_count++))
     # Modify DevWorkspace template
-    # Goal is to apply a devworkspace resource to the cluster, 
+    # Goal is to apply a devworkspace resource to the cluster,
     # with a replacement of the below placeholder in the template:
     # DEVWORKSPACE_NAME -> the devworksapce name in the setting
     # DEVWORKSPACE_NS -> the devworkspace namespace from current context
     # DEVFILE -> one of the devfile url in a list
     # PROJECT_URL -> one the project sample url in a list
-    # EDITOR_DEFINITION -> the editor definition url 
+    # EDITOR_DEFINITION -> the editor definition url
     # When using PR mode, replace uri with kubernetes reference; otherwise use uri
     if [ -n "${OVERRIDE_IMAGE}" ]; then
       EDITOR_SED_EXPR="s|uri: EDITOR_DEFINITION|kubernetes:\\
@@ -353,7 +369,7 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
     # Modify the result (must be separate)
     # here is the replacement of the container image used in the devfile from an image in the list
     eval "sed \"s|image: .*|image: ${image}|\" > ${TMP_DEVWORKSPACE}"
-    eval "oc apply -f ${TMP_DEVWORKSPACE} ${QUIET}"
+    run_cmd oc apply -f "${TMP_DEVWORKSPACE}"
     state=""
     log -n "Waiting for ${DEVWORKSPACE_NAME} .."
     count=0
@@ -368,10 +384,10 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
     else
       log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start${NC}"
       if shouldExclude ${image}; then
-        echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌ (EXCLUDED ↩️ )"
+        log -f "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌ (EXCLUDED ↩️ )"
         excluded_test+=("Devfile '$devfile_url' using image '$image'")
       else
-        echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌"
+        log -f "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌"
         failed_test+=("Devfile '$devfile_url' using image '$image'")
       fi
       continue
@@ -379,14 +395,14 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
     log "Validating ${DEVWORKSPACE_NAME} .."
     validate_devworkspace ${devfile_url}
     if [ $? -eq 0 ]; then
-      echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} PASSED ✅"
+      log -f "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} PASSED ✅"
       ((success_count++))
     else
       if shouldExclude ${image}; then
-        echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌ (EXCLUDED ↩️ )"
+        log -f "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌ (EXCLUDED ↩️ )"
         excluded_test+=("Devfile '$devfile_url' using image '$image'")
       else
-        echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌"
+        log -f "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌"
         failed_test+=("Devfile '$devfile_url' using image '$image'")
       fi
     fi
@@ -397,10 +413,10 @@ done # devfile loop
 
 # cleanup
 cleanup() {
-  echo -e "\n${BLUE}Cleaning up resources...${NC}"
-  eval "oc delete dw ${DEVWORKSPACE_NAME} ${QUIET}"
+  log -f "\n${BLUE}Cleaning up resources...${NC}"
+  run_cmd oc delete dw "${DEVWORKSPACE_NAME}" 2>/dev/null
   if [ -n "${OVERRIDE_IMAGE}" ]; then
-    eval "oc delete devworkspacetemplate ${EDITOR_DWT_NAME} ${QUIET}"
+    run_cmd oc delete devworkspacetemplate "${EDITOR_DWT_NAME}"
   fi
   sleep 1s
 
@@ -431,22 +447,27 @@ else
   ELAPSED_DISPLAY="${ELAPSED_MIN}m ${ELAPSED_SEC}s"
 fi
 
-echo    ""
-echo    "======================"
-echo    "Summary:"
-echo -e "  Total tests: ${BLUE}$total_count${NC} "
-echo -e "  Successful: ${GREEN}$success_count${NC}"
-echo -e "  Failed: ${RED}${#failed_test[@]}${NC}"
-echo -e "  Excluded: ${YELLOW}${#excluded_test[@]}${NC}"
-echo -e "  Elapsed time: ${PURPLE}${ELAPSED_DISPLAY}${NC}"
-echo    "======================"
+log -f ""
+log -f "======================"
+log -f "Summary:"
+log -f "  Total tests: ${BLUE}$total_count${NC} "
+log -f "  Successful: ${GREEN}$success_count${NC}"
+log -f "  Failed: ${RED}${#failed_test[@]}${NC}"
+log -f "  Excluded: ${YELLOW}${#excluded_test[@]}${NC}"
+log -f "  Elapsed time: ${PURPLE}${ELAPSED_DISPLAY}${NC}"
+log -f "======================"
 
 if [ ${#failed_test[@]} -gt 0 ]; then
-  echo ""
-  echo "Failed tests:"
+  log -f ""
+  log -f "Failed tests:"
   for tst in "${failed_test[@]}"; do
-    echo "  - $tst"
+    log -f "  - $tst"
   done
-  exit 1
 fi
 
+log -f ""
+log -f "Log file: ${BLUE}${LOG_FILE}${NC}"
+
+if [ ${#failed_test[@]} -gt 0 ]; then
+  exit 1
+fi

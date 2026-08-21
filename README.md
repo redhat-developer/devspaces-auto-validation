@@ -125,9 +125,12 @@ The two-stage approach ensures devfile content is injected before image replacem
 
 ### Logging and Output Control
 
-- `log()`: Outputs only when `VERBOSE=1` (set by `-v` or `-d` flags)
-- `${QUIET}`: Set to `&>/dev/null` in non-verbose mode, empty string otherwise
-  - Used with `eval` to conditionally suppress `oc` command output: `eval "oc apply -f ${TMP_DEVWORKSPACE} ${QUIET}"`
+All output is captured to a temporary log file (`/tmp/dw-auto-validate-XXXXXX.log`) regardless of verbose mode. The log file path is printed at the end of every run.
+
+- `log()`: Always writes to the log file. Only prints to the console when `VERBOSE=1` (set by `-v` or `-d` flags).
+  - `log -f`: Forces output to the console regardless of verbose mode (used for test results, status messages, and the summary).
+  - Supports `-n` for no-newline output (progress dots).
+- `run_cmd()`: Executes external commands (`oc`, `skopeo`) with output captured to the log file. In verbose mode, output is also shown on the console via `tee`.
 
 ### Timing
 
