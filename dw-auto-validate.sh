@@ -27,15 +27,16 @@ log() {
   if [ ${VERBOSE} -eq 1 ] || [ ${force} -eq 1 ]; then
     echo -e "${@}"
   fi
-  echo -e "${@}" >> "${LOG_FILE}"
+  echo -e "${@}" | sed 's/\x1b\[[0-9;]*m//g' >> "${LOG_FILE}"
 }
 
 run_cmd() {
   if [ ${VERBOSE} -eq 1 ]; then
-    "$@" 2>&1 | tee -a "${LOG_FILE}"
+    "$@" 2>&1 | tee >(sed 's/\x1b\[[0-9;]*m//g' >> "${LOG_FILE}")
     return "${PIPESTATUS[0]}"
   else
-    "$@" >> "${LOG_FILE}" 2>&1
+    "$@" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' >> "${LOG_FILE}"
+    return "${PIPESTATUS[0]}"
   fi
 }
 
