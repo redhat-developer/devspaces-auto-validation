@@ -96,11 +96,11 @@ log() {
 # Sets global variables: podName, mainContainerName
 # Returns 1 if pod or container cannot be found.
 resolve_devworkspace_pod() {
-  podNameAndDWName=$(oc get pods -o 'jsonpath={range .items[*]}{.metadata.name}{","}{.metadata.labels.controller\.devfile\.io/devworkspace_name}{"\n"}{end}')
+  podNameAndDWName=$(oc get pods --field-selector=status.phase=Running -o 'jsonpath={range .items[*]}{.metadata.name}{","}{.metadata.labels.controller\.devfile\.io/devworkspace_name}{"\n"}{end}')
   log "${YELLOW}podNameAndDWName: \n${NC}${podNameAndDWName}"
-  podName=$(echo "${podNameAndDWName}" | grep ${DEVWORKSPACE_NAME} | cut -d, -f1)
+  podName=$(echo "${podNameAndDWName}" | grep ${DEVWORKSPACE_NAME} | head -1 | cut -d, -f1)
   log "${YELLOW}podName: \n${NC}${podName}"
-  mainContainerName=$(oc get devworkspace ${DEVWORKSPACE_NAME} -o json | jq -r '[.spec.template.components[] | select(.container) | .name] | first')
+  mainContainerName=$(oc get pod "${podName}" -o json | jq -r '[.status.containerStatuses[] | select(.state.running and (.name | test("^che-") | not))] | first | .name // empty')
   log "${YELLOW}mainContainerName: \n${NC}${mainContainerName}"
   if [ -z "${podName}" ] || [ -z "${mainContainerName}" ]; then
     log "Could not find pod/container matching ${DEVWORKSPACE_NAME}"
@@ -110,8 +110,38 @@ resolve_devworkspace_pod() {
   return 0
 }
 
+# Stops or deletes the current DevWorkspace to prepare for the next test.
+cleanup_test() {
+  [ ${DEBUG} -eq 1 ] && log "\n${YELLOW}Debug mode:${NC} Skipping test cleanup, DevWorkspace (${DEVWORKSPACE_NAME}) not deleted." && return 0
+  current_phase=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.phase}' 2>/dev/null)
+  if [ "${current_phase}" == "Failed" ]; then
+    log -n "Force-deleting ${DEVWORKSPACE_NAME} (Failed state) "
+    oc delete dw ${DEVWORKSPACE_NAME} &>/dev/null
+    # wait for pods to fully terminate before next test
+    while oc get pods -l "controller.devfile.io/devworkspace_name=${DEVWORKSPACE_NAME}" --no-headers 2>/dev/null | grep -q .; do
+      sleep 1s
+      log -n "."
+    done
+    log " deleted."
+  elif [ "${current_phase}" == "Running" ] || [ "${current_phase}" == "Starting" ]; then
+    eval "oc patch dw ${DEVWORKSPACE_NAME} --type merge -p '{\"spec\":{\"started\":false}}' ${QUIET}"
+    log -n "Stopping ${DEVWORKSPACE_NAME} ."
+    stop_count=0
+    stop_timeout=$((TIMEOUT / 4))
+    while [ "$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.phase}' 2>/dev/null)" != "Stopped" ] && [ ${stop_count} -lt ${stop_timeout} ]; do
+      sleep 1s
+      log -n "."
+      stop_count=$((stop_count+1))
+    done
+    if [ ${stop_count} -ge ${stop_timeout} ]; then
+      log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to stop (timed out after ${stop_timeout}s)${NC}"
+    fi
+    log " stopped."
+  fi
+}
+
 shouldExclude() {
-  for imagePattern in ${EXCLUDED_IMAGE_PATTERNS[@]}; do
+  for imagePattern in "${EXCLUDED_IMAGE_PATTERNS[@]}"; do
     if [[ ${1} =~ ${imagePattern} ]]; then
       return 0
     fi
@@ -155,7 +185,7 @@ if [ -n "${PR_NUMBER}" ]; then
     echo -e "${GREEN}Ok!${NC}"
     echo -e "\n${BLUE}Checking PR image...${NC}"
     log "Executing 'skopeo inspect'..."
-    eval skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${PR_IMAGE}" ${QUIET}
+    eval skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${PR_IMAGE}" "${QUIET}"
     if [ $? -ne 0 ]; then
       echo -e "${RED}Error:${NC} PR image '${PR_IMAGE}' not found. Make sure the GitHub Action has published the image." >&2
       exit 1
@@ -168,7 +198,7 @@ if [ -n "${CUSTOM_IMAGE}" ]; then
   if [ -x "$(command -v skopeo)" ]; then
     echo -e "\n${BLUE}Checking custom image...${NC}"
     log "Executing 'skopeo inspect'..."
-    eval skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${CUSTOM_IMAGE}" ${QUIET}
+    eval skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${CUSTOM_IMAGE}" "${QUIET}"
     if [ $? -ne 0 ]; then
       echo -e "${YELLOW}Warning:${NC} Could not verify custom image '${CUSTOM_IMAGE}'. Proceeding anyway."
     else
@@ -188,11 +218,11 @@ fi
 echo -e "\n${BLUE}Checking cluster connection...${NC}"
 log "Executing 'oc whoami'..."
 current_cluster=$(oc config current-context)
-eval oc whoami --insecure-skip-tls-verify ${QUIET}
+eval oc whoami --insecure-skip-tls-verify "${QUIET}"
 if [ $? -eq 1 ]; then
   echo -e "${YELLOW}Not connected.${NC} Do you want to login to current cluster? Current cluster is ${PURPLE}${current_cluster}.${NC}"
   while true; do
-    read -p "(y/n)? : " yn
+    read -rp "(y/n)? : " yn
     case $yn in
       [Yy]* ) oc login --web; break;;
       [Nn]* ) exit;;
@@ -207,7 +237,7 @@ fi
 if [ -z "${SCENARIO}" ]; then
   echo -e "\n${BLUE}Choose the dedicated scenario to run the validation test suite.${NC}\n1-sshd\n2-jetbrains\n3-vscode"
   while true; do
-    read -p "(1/2/3)? : " scenario
+    read -rp "(1/2/3)? : " scenario
     case $scenario in
       1 ) SCENARIO=sshd; break;;
       2 ) SCENARIO=jetbrains; break;;
@@ -218,7 +248,8 @@ if [ -z "${SCENARIO}" ]; then
 fi
 
 # Read values from scenario's setting
-. settings/settings-${SCENARIO}.env
+# shellcheck source=settings/settings-vscode.env
+. settings/settings-"${SCENARIO}".env
 
 # user namespace where testing will occur
 DEVWORKSPACE_NS=$(oc project -q)
@@ -259,7 +290,7 @@ DWTEOF
 fi
 
 # Temporary storage for generated files
-TMP_DEVFILE=$(mktemp -t devfile-${SCENARIO}-XXX.yaml)
+TMP_DEVFILE=$(mktemp -t devfile-"${SCENARIO}"-XXX.yaml)
 TMP_DEVWORKSPACE=$(mktemp -t devworkspace-XXX.yaml)
 
 # parsing images list
@@ -319,8 +350,33 @@ fi
 echo -e "${BLUE}There will be ${total_tests} tests performed in total.${NC}"
 
 for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
-  curl -sL -o ${TMP_DEVFILE} ${devfile_url}
-  sed -i.tmp 's/^/    /' ${TMP_DEVFILE} && rm -f "${TMP_DEVFILE}.tmp" 
+  http_code=$(curl -sL -o "${TMP_DEVFILE}" -w '%{http_code}' "${devfile_url}")
+  if [ "${http_code}" != "200" ]; then
+    echo "${devfile_url} — fetch failed (HTTP ${http_code}), skipping this devfile. Numbers might not be accurate. ❌"
+    failed_test+=("Devfile '${devfile_url}' — fetch failed (HTTP ${http_code})")
+    continue
+  fi
+
+  # Build the projects block: use the devfile's starterProjects if present,
+  # otherwise fall back to the default sample project.
+  # Must check before indenting the devfile.
+  TMP_PROJECTS=$(mktemp -t projects-XXX.yaml)
+  if grep -q '^starterProjects:' "${TMP_DEVFILE}"; then
+    sed -n '/^starterProjects:/,/^[a-zA-Z]/{/^starterProjects:/p; /^  /p}' "${TMP_DEVFILE}" | \
+    sed 's/^starterProjects:/projects:/' | \
+    sed 's/^/    /' > "${TMP_PROJECTS}"
+
+  else
+    cat > "${TMP_PROJECTS}" <<'PROJEOF'
+    projects:
+      - name: project-sample
+        git:
+          remotes:
+            origin: PROJECT_URL
+PROJEOF
+  fi
+
+  sed -i.tmp 's/^/    /' "${TMP_DEVFILE}" && rm -f "${TMP_DEVFILE}.tmp"
 
   for image in "${IMAGES_LIST[@]}"; do
     #debug mode: stop after one iteration
@@ -346,6 +402,8 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
     sed \
     -e "/DEVFILE/r ${TMP_DEVFILE}" \
     -e '/DEVFILE/ d' \
+    -e "/PROJECTS/r ${TMP_PROJECTS}" \
+    -e '/PROJECTS/ d' \
     -e "s|DEVWORKSPACE_NAME|${DEVWORKSPACE_NAME}|" \
     -e "s|DEVWORKSPACE_NS|${DEVWORKSPACE_NS}|" \
     -e "${EDITOR_SED_EXPR}" \
@@ -355,34 +413,41 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
     eval "sed \"s|image: .*|image: ${image}|\" > ${TMP_DEVWORKSPACE}"
     eval "oc apply -f ${TMP_DEVWORKSPACE} ${QUIET}"
     state=""
-    log -n "Waiting for ${DEVWORKSPACE_NAME} .."
+    log -n "Waiting for ${DEVWORKSPACE_NAME} to run ."
     count=0
-    while [ "${state}" != "Running" ] && [ ${count} -lt ${TIMEOUT} ]; do
+    while [ "${state}" != "Running" ] && [ "${state}" != "Failed" ] && [ ${count} -lt ${TIMEOUT} ]; do
       state=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.phase}')
       sleep 1s
       log -n "."
       count=$((count+1))
     done
-    if [ ${state} == "Running" ]; then
-      log "\n${GREEN}${DEVWORKSPACE_NAME} is Running${NC}"
+    if [ "${state}" == "Running" ]; then
+      log "\n${GREEN}${DEVWORKSPACE_NAME} is running.${NC}"
     else
-      log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start${NC}"
-      if shouldExclude ${image}; then
+      if [ "${state}" == "Failed" ]; then
+        dw_message=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.message}' 2>/dev/null)
+        log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start (state: Failed after ${count}s)${NC}"
+        log "${RED}Reason: ${dw_message}${NC}"
+      else
+        log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start (timed out after ${TIMEOUT}s, last state: ${state})${NC}"
+      fi
+      if shouldExclude "${image}"; then
         echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌ (EXCLUDED ↩️ )"
         excluded_test+=("Devfile '$devfile_url' using image '$image'")
       else
         echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌"
         failed_test+=("Devfile '$devfile_url' using image '$image'")
       fi
+      cleanup_test
       continue
     fi
     log "Validating ${DEVWORKSPACE_NAME} .."
-    validate_devworkspace ${devfile_url}
+    validate_devworkspace
     if [ $? -eq 0 ]; then
       echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} PASSED ✅"
       ((success_count++))
     else
-      if shouldExclude ${image}; then
+      if shouldExclude "${image}"; then
         echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌ (EXCLUDED ↩️ )"
         excluded_test+=("Devfile '$devfile_url' using image '$image'")
       else
@@ -390,30 +455,32 @@ for devfile_url in "${DEVFILE_URL_LIST[@]}"; do
         failed_test+=("Devfile '$devfile_url' using image '$image'")
       fi
     fi
+    cleanup_test
     sleep 1s
   done # image loop
-
+  [[ ${DEBUG} -eq 1 && ${total_count} -ge 1 ]] && break
 done # devfile loop
 
-# cleanup
-cleanup() {
+# cleanup suite: delete remote resources and temporary files
+cleanup_suite() {
   echo -e "\n${BLUE}Cleaning up resources...${NC}"
-  eval "oc delete dw ${DEVWORKSPACE_NAME} ${QUIET}"
+  eval "oc delete dw ${DEVWORKSPACE_NAME} 2>/dev/null ${QUIET}"
   if [ -n "${OVERRIDE_IMAGE}" ]; then
     eval "oc delete devworkspacetemplate ${EDITOR_DWT_NAME} ${QUIET}"
   fi
   sleep 1s
 
-  rm $TMP_DEVFILE
-  rm $TMP_DEVWORKSPACE
+  rm "$TMP_DEVFILE"
+  rm "$TMP_PROJECTS"
+  rm "$TMP_DEVWORKSPACE"
   if [ -n "${OVERRIDE_IMAGE}" ]; then
-    rm $TMP_EDITOR_DEF
-    rm $TMP_DWT
+    rm "$TMP_EDITOR_DEF"
+    rm "$TMP_DWT"
   fi
 }
 
 if [ ${DEBUG} -eq 0 ]; then
-  cleanup
+  cleanup_suite
 else
   EXTRA_MSG=""
   [ -n "${OVERRIDE_IMAGE}" ] && EXTRA_MSG="\nTemporary editor definition file (${TMP_EDITOR_DEF}) not deleted\nTemporary devworkspace template file (${TMP_DWT}) not deleted\nRemote DevworkspaceTemplate (${EDITOR_DWT_NAME}) not deleted"
