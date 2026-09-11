@@ -1,0 +1,68 @@
+name: Dev Spaces Auto Validation
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      EDITOR_DEFINITION_SSH:
+        description: 'The (optional) editor definition URL for SSHD.'
+        type: string
+      EDITOR_DEFINITION_VSCODE:
+        description: 'The (optional) editor definition URL for VSCODE.'
+        type: string
+      EDITOR_DEFINITION_JETBRAINS:
+        description: 'The (optional) editor definition URL for JETBRAINS.'
+        type: string
+
+jobs:
+  dw-auto-validate:
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - scenario: vscode
+            image: ''
+          - scenario: sshd
+            image: ''
+          - scenario: jetbrains
+            image: ''
+          - scenario: vscode
+            image: 'quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-rhel9:latest'
+          - scenario: sshd
+            image: 'quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-sshd-rhel9:latest'
+          - scenario: jetbrains
+            image: 'quay.io/redhat-user-workloads/devspaces-tenant/devspaces/jetbrains-ide-rhel9:latest'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install oc CLI
+        uses: redhat-actions/openshift-tools-installer@v3
+        with:
+          oc: latest
+      - name: Checkout Dev Spaces Auto Validation
+        uses: actions/checkout@v6
+        with:
+          repository: 'redhat-developer/devspaces-auto-validation'
+      - name: Login to OpenShift
+        uses: redhat-actions/oc-login@v2
+        with:
+          openshift_server_url: ${{ secrets.OC_SERVER }}
+          openshift_token: ${{ secrets.OC_TOKEN }}
+          namespace: ${{ secrets.OC_PROJECT }}
+      - name: Run Dev Spaces Auto Validation
+        run: |
+          if [ "${{ inputs.EDITOR_DEFINITION_SSH }}" != '' ]; then
+            sed -i "s|https://.*\.yaml|${{ inputs.EDITOR_DEFINITION_SSH }}|" settings/settings-sshd.env
+          fi
+          if [ "${{ inputs.EDITOR_DEFINITION_VSCODE }}" != '' ]; then
+            sed -i "s|https://.*\.yaml|${{ inputs.EDITOR_DEFINITION_VSCODE }}|" settings/settings-vscode.env
+          fi
+          if [ "${{ inputs.EDITOR_DEFINITION_JETBRAINS }}" != '' ]; then
+            sed -i "s|https://.*\.yaml|${{ inputs.EDITOR_DEFINITION_JETBRAINS }}|" settings/settings-jetbrains.env
+          fi
+          cp images/images-full.txt images/images.txt
+          sed -i '/nodejs/!d' devfiles/devfiles.txt
+          EXTRA_ARGS=""
+          if [ -n "${{ matrix.image }}" ]; then
+            EXTRA_ARGS="-i ${{ matrix.image }}"
+          fi
+          ./dw-auto-validate.sh -v -s ${{ matrix.scenario }} ${EXTRA_ARGS}
