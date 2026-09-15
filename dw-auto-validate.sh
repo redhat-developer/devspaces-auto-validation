@@ -40,6 +40,21 @@ run_cmd() {
   fi
 }
 
+SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+SPINNER_IDX=0
+spin() {
+  if [ ${VERBOSE} -eq 0 ]; then
+    printf "\r  %s %s " "${SPINNER_CHARS:SPINNER_IDX:1}" "${1}"
+    SPINNER_IDX=$(( (SPINNER_IDX + 1) % ${#SPINNER_CHARS} ))
+  fi
+}
+
+clear_spin() {
+  if [ ${VERBOSE} -eq 0 ]; then
+    printf "\r\033[K"
+  fi
+}
+
 
 #################################
 # Parameters for fun or experts #
@@ -436,10 +451,12 @@ PROJEOF
       state=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.phase}')
       sleep 1s
       log -n "."
+      spin "Waiting for ${DEVWORKSPACE_NAME} [${state:-Pending}] (${count}s/${TIMEOUT}s)"
       count=$((count+1))
     done
-    if [ "${state}" == "Running" ]; then
-      log "\n${GREEN}${DEVWORKSPACE_NAME} is running.${NC}"
+    clear_spin
+    if [ ${state} == "Running" ]; then
+      log "\n${GREEN}${DEVWORKSPACE_NAME} is Running${NC}"
     else
       if [ "${state}" == "Failed" ]; then
         dw_message=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.message}' 2>/dev/null)
