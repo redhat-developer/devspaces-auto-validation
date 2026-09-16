@@ -16,6 +16,7 @@ NC='\033[0m' # No Color
 
 # Log file: always captures verbose-level output
 LOG_FILE=$(mktemp /tmp/dw-auto-validate-XXXXXX.log)
+STRIP_ANSI='s/\x1b\[[0-9;]*m//g'
 
 # -f flag forces output to console regardless of verbose mode
 log() {
@@ -27,31 +28,44 @@ log() {
   if [ ${VERBOSE} -eq 1 ] || [ ${force} -eq 1 ]; then
     echo -e "${@}"
   fi
-  echo -e "${@}" | sed 's/\x1b\[[0-9;]*m//g' >> "${LOG_FILE}"
+  echo -e "${@}" | sed "${STRIP_ANSI}" >> "${LOG_FILE}"
 }
 
 run_cmd() {
   if [ ${VERBOSE} -eq 1 ]; then
-    "$@" 2>&1 | tee >(sed 's/\x1b\[[0-9;]*m//g' >> "${LOG_FILE}")
+    "$@" 2>&1 | tee >(sed "${STRIP_ANSI}" >> "${LOG_FILE}")
     return "${PIPESTATUS[0]}"
   else
-    "$@" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' >> "${LOG_FILE}"
+    "$@" 2>&1 | sed "${STRIP_ANSI}" >> "${LOG_FILE}"
     return "${PIPESTATUS[0]}"
   fi
 }
 
 SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-SPINNER_IDX=0
-spin() {
-  if [ ${VERBOSE} -eq 0 ]; then
-    printf "\r  %s %s " "${SPINNER_CHARS:SPINNER_IDX:1}" "${1}"
-    SPINNER_IDX=$(( (SPINNER_IDX + 1) % ${#SPINNER_CHARS} ))
-  fi
+SPINNER_PID=""
+TEST_LABEL=""
+
+start_spin() {
+  [ ${VERBOSE} -eq 1 ] && return
+  stop_spin
+  local msg="${1}"
+  (
+    local idx=0
+    while true; do
+      printf "\r%s %s — %s " "${SPINNER_CHARS:idx:1}" "${TEST_LABEL}" "${msg}"
+      idx=$(( (idx + 1) % ${#SPINNER_CHARS} ))
+      sleep 0.1
+    done
+  ) &
+  SPINNER_PID=$!
 }
 
-clear_spin() {
-  if [ ${VERBOSE} -eq 0 ]; then
+stop_spin() {
+  if [ -n "${SPINNER_PID}" ]; then
+    kill "${SPINNER_PID}" 2>/dev/null
+    wait "${SPINNER_PID}" 2>/dev/null
     printf "\r\033[K"
+    SPINNER_PID=""
   fi
 }
 
@@ -148,16 +162,19 @@ cleanup_test() {
   current_phase=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.phase}' 2>/dev/null)
   if [ "${current_phase}" == "Failed" ]; then
     log -n "Force-deleting ${DEVWORKSPACE_NAME} (Failed state) "
+    start_spin "Cleaning up..."
     oc delete dw ${DEVWORKSPACE_NAME} &>/dev/null
     # wait for pods to fully terminate before next test
     while oc get pods -l "controller.devfile.io/devworkspace_name=${DEVWORKSPACE_NAME}" --no-headers 2>/dev/null | grep -q .; do
       sleep 1s
       log -n "."
     done
+    stop_spin
     log " deleted."
   elif [ "${current_phase}" == "Running" ] || [ "${current_phase}" == "Starting" ]; then
-    eval "oc patch dw ${DEVWORKSPACE_NAME} --type merge -p '{\"spec\":{\"started\":false}}' ${QUIET}"
+    run_cmd oc patch dw "${DEVWORKSPACE_NAME}" --type merge -p '{"spec":{"started":false}}'
     log -n "Stopping ${DEVWORKSPACE_NAME} ."
+    start_spin "Stopping..."
     stop_count=0
     stop_timeout=$((TIMEOUT / 4))
     while [ "$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.phase}' 2>/dev/null)" != "Stopped" ] && [ ${stop_count} -lt ${stop_timeout} ]; do
@@ -165,6 +182,7 @@ cleanup_test() {
       log -n "."
       stop_count=$((stop_count+1))
     done
+    stop_spin
     if [ ${stop_count} -ge ${stop_timeout} ]; then
       log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to stop (timed out after ${stop_timeout}s)${NC}"
     fi
@@ -413,8 +431,10 @@ PROJEOF
   for image in "${IMAGES_LIST[@]}"; do
     #debug mode: stop after one iteration
     [[ ${DEBUG} -eq 1 && ${total_count} == 1 ]] && continue
-    log "\n${BLUE}Begin test of ${devfile_url} with ${image}${NC}"
     ((total_count++))
+    TEST_LABEL="TEST [${total_count}/${total_tests}]"
+    log "\n${BLUE}Begin test of ${devfile_url} with ${image}${NC}"
+    start_spin "Initializing..."
     # Modify DevWorkspace template
     # Goal is to apply a devworkspace resource to the cluster,
     # with a replacement of the below placeholder in the template:
@@ -444,18 +464,19 @@ PROJEOF
     # here is the replacement of the container image used in the devfile from an image in the list
     eval "sed \"s|image: .*|image: ${image}|\" > ${TMP_DEVWORKSPACE}"
     run_cmd oc apply -f "${TMP_DEVWORKSPACE}"
+    stop_spin
     state=""
     log -n "Waiting for ${DEVWORKSPACE_NAME} to run ."
     count=0
     while [ "${state}" != "Running" ] && [ "${state}" != "Failed" ] && [ ${count} -lt ${TIMEOUT} ]; do
       state=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.phase}')
+      start_spin "Waiting for pod status... [${state:-Pending}]"
       sleep 1s
       log -n "."
-      spin "Waiting for ${DEVWORKSPACE_NAME} [${state:-Pending}] (${count}s/${TIMEOUT}s)"
       count=$((count+1))
     done
-    clear_spin
-    if [ ${state} == "Running" ]; then
+    stop_spin
+    if [ "${state}" == "Running" ]; then
       log "\n${GREEN}${DEVWORKSPACE_NAME} is Running${NC}"
     else
       if [ "${state}" == "Failed" ]; then
@@ -476,12 +497,15 @@ PROJEOF
       continue
     fi
     log "Validating ${DEVWORKSPACE_NAME} .."
+    start_spin "Validating..."
     validate_devworkspace
-    if [ $? -eq 0 ]; then
+    validate_rc=$?
+    stop_spin
+    if [ ${validate_rc} -eq 0 ]; then
       log -f "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} PASSED ✅"
       ((success_count++))
     else
-      if shouldExclude ${image}; then
+      if shouldExclude "${image}"; then
         log -f "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌ (EXCLUDED ↩️ )"
         excluded_test+=("Devfile '$devfile_url' using image '$image'")
       else
