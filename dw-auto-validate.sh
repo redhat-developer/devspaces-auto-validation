@@ -380,6 +380,7 @@ done < ${DEVFILE_LIST_PATH}
 #Run the tests now that everything is set up
 CURRENT_SERVER=$(oc whoami --show-server)
 log -f "\n${BLUE}Running test scenario '${SCENARIO}' using ${DEVWORKSPACE_NAME} devworkspace in ${DEVWORKSPACE_NS} namespace against server ${CURRENT_SERVER}...${NC}"
+log -f "Logging into: ${BLUE}${LOG_FILE}${NC}"
 
 failed_test=()
 success_count=0
