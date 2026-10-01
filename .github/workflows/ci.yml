@@ -3,6 +3,15 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      OC_SERVER:
+        description: 'OpenShift cluster API URL (defaults to che-dogfooding)'
+        type: string
+      OC_TOKEN:
+        description: 'OpenShift token (defaults to secret)'
+        type: string
+      OC_PROJECT:
+        description: 'OpenShift namespace (defaults to secret)'
+        type: string
       EDITOR_DEFINITION_SSH:
         description: 'The (optional) editor definition URL for SSHD.'
         type: string
@@ -11,6 +20,13 @@ on:
         type: string
       EDITOR_DEFINITION_JETBRAINS:
         description: 'The (optional) editor definition URL for JETBRAINS.'
+        type: string
+      RUN_IMAGE_MATRIX:
+        description: 'Run image matrix entries (with custom editor images)'
+        type: boolean
+        default: true
+      PR_NUMBER:
+        description: 'che-code PR number to test (optional, runs PR image matrix)'
         type: string
 
 jobs:
@@ -22,33 +38,77 @@ jobs:
         include:
           - scenario: vscode
             image: ''
+            mode: main
           - scenario: sshd
             image: ''
+            mode: main
           - scenario: jetbrains
             image: ''
+            mode: main
           - scenario: vscode
             image: 'quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-rhel9:latest'
+            mode: image
           - scenario: sshd
             image: 'quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-sshd-rhel9:latest'
+            mode: image
           - scenario: jetbrains
             image: 'quay.io/redhat-user-workloads/devspaces-tenant/devspaces/jetbrains-ide-rhel9:latest'
+            mode: image
+          - scenario: vscode
+            image: ''
+            mode: pr
+          - scenario: sshd
+            image: ''
+            mode: pr
+          - scenario: jetbrains
+            image: ''
+            mode: pr
     runs-on: ubuntu-latest
     steps:
+      - name: Check if matrix entry should run
+        id: should-run
+        run: |
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            # On PRs, only run main matrix entries
+            if [ "${{ matrix.mode }}" == "main" ]; then
+              echo "run=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "run=false" >> "$GITHUB_OUTPUT"
+            fi
+          elif [ "${{ matrix.mode }}" == "main" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ matrix.mode }}" == "image" ]; then
+            if [ "${{ inputs.RUN_IMAGE_MATRIX }}" == "true" ] && [ -z "${{ inputs.PR_NUMBER }}" ]; then
+              echo "run=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "run=false" >> "$GITHUB_OUTPUT"
+            fi
+          elif [ "${{ matrix.mode }}" == "pr" ]; then
+            if [ -n "${{ inputs.PR_NUMBER }}" ]; then
+              echo "run=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "run=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
       - name: Install oc CLI
+        if: steps.should-run.outputs.run == 'true'
         uses: redhat-actions/openshift-tools-installer@v3
         with:
           oc: latest
       - name: Checkout Dev Spaces Auto Validation
+        if: steps.should-run.outputs.run == 'true'
         uses: actions/checkout@v6
         with:
           repository: 'redhat-developer/devspaces-auto-validation'
       - name: Login to OpenShift
+        if: steps.should-run.outputs.run == 'true'
         uses: redhat-actions/oc-login@v2
         with:
-          openshift_server_url: ${{ secrets.OC_SERVER }}
-          openshift_token: ${{ secrets.OC_TOKEN }}
-          namespace: ${{ secrets.OC_PROJECT }}
+          openshift_server_url: ${{ inputs.OC_SERVER || secrets.OC_SERVER }}
+          openshift_token: ${{ inputs.OC_TOKEN || secrets.OC_TOKEN }}
+          namespace: ${{ inputs.OC_PROJECT || secrets.OC_PROJECT }}
       - name: Run Dev Spaces Auto Validation
+        if: steps.should-run.outputs.run == 'true'
         run: |
           if [ "${{ inputs.EDITOR_DEFINITION_SSH }}" != '' ]; then
             sed -i "s|https://.*\.yaml|${{ inputs.EDITOR_DEFINITION_SSH }}|" settings/settings-sshd.env
@@ -62,7 +122,9 @@ jobs:
           cp images/images-full.txt images/images.txt
           sed -i '/nodejs/!d' devfiles/devfiles.txt
           EXTRA_ARGS=""
-          if [ -n "${{ matrix.image }}" ]; then
+          if [ "${{ matrix.mode }}" == "image" ]; then
             EXTRA_ARGS="-i ${{ matrix.image }}"
+          elif [ "${{ matrix.mode }}" == "pr" ]; then
+            EXTRA_ARGS="-p ${{ inputs.PR_NUMBER }}"
           fi
           ./dw-auto-validate.sh -v -s ${{ matrix.scenario }} ${EXTRA_ARGS}
