@@ -2,13 +2,14 @@
 failed_images=()
 success_count=0
 total_count=0
+image_count=$(grep -c '[^[:space:]]' images/images-full.txt)
 
 while IFS= read -r image; do
   # Skip empty lines
   [[ -z "$image" ]] && continue
 
   ((total_count++))
-  echo "Checking [$total_count]: $image"
+  echo "Checking [$total_count/$image_count]: $image"
 
   if skopeo inspect --no-tags --retry-times 2 "docker://$image" > /dev/null 2>&1; then
     ((success_count++))

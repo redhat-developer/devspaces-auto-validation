@@ -7,13 +7,13 @@ Automated validation tool for testing DevWorkspace instances on OpenShift cluste
 ### Running Tests
 
 ```bash
-# Basic validation (uses small numbers of entries - 3 images, 5 devfiles)
+# Basic validation (uses small lists - images/images.txt and devfiles/devfiles.txt)
 ./dw-auto-validate.sh
 
 # Verbose mode - shows detailed output
 ./dw-auto-validate.sh -v
 
-# Full test matrix (uses all entries from -full.txt files - all images, all devfiles. Takes significant time to complete!)
+# Full test matrix (uses *-full.txt files - all images, all devfiles. Takes significant time to complete!)
 ./dw-auto-validate.sh -f
 
 # Debug mode - verbose + runs only first test + no cleanup
@@ -58,7 +58,7 @@ Automated validation tool for testing DevWorkspace instances on OpenShift cluste
    - Iterates through devfiles × images matrix
    - For each combination: creates DevWorkspace, waits for Running state, validates, records results
 5. **Cleanup**: Deletes DevWorkspace and temporary files (skipped in debug mode)
-6. **Summary Report**: Shows test counts, success/failure, elapsed time, and lists failed tests
+6. **Summary Report**: Shows test counts, success/failure/excluded, elapsed time, and lists failed tests
 
 ### Command-Line Flags
 
@@ -70,7 +70,7 @@ Automated validation tool for testing DevWorkspace instances on OpenShift cluste
 - `-i <IMAGE>`: Test a custom editor image — same mechanism as `-p` but with an arbitrary image reference (mutually exclusive with `-p`)
 - `-h`: Help - displays usage information
 
-**Debug mode specifics**: Sets `DEBUG=1`, `FULL=0`, `VERBOSE=1`, runs only the first test iteration (`[[ ${DEBUG} -eq 1 && ${total_count} == 1 ]] && continue`), skips cleanup to allow resource inspection.
+**Debug mode specifics**: Sets `DEBUG=1`, `FULL=0`, `VERBOSE=1`, runs only the first test iteration (`[[ ${DEBUG} -eq 1 && ${total_count} -ge 1 ]] && break`), skips cleanup to allow resource inspection.
 
 ### Scenarios
 
@@ -81,38 +81,37 @@ Each scenario in `settings/settings-<SCENARIO>.env` exports:
 - `PROJECT_URL`: Git repository URL (must include surrounding double quotes)
 - `EDITOR_DEFINITION`: URL to the editor definition YAML
 - `EDITOR_COMPONENT_NAME`: Component name in the editor definition that contains the editor image (used by `-i`/`-p` to replace the correct image)
-- `validate_devworkspace()`: Function that validates the running DevWorkspace
+- `EXCLUDED_IMAGE_PATTERNS`: Array of Posix Extended Regular Expressions for images excluded from failure counts
+- `validate_devworkspace()`: Function that evaluates whether the DevWorkspace is valid (scenario-specific checks)
 
-#### Scenario Validation Methods
+#### Scenario Validation
 
-**sshd** (settings-sshd.env):
-- Timeout: 60s
-- Checks `/tmp/sshd.log` for "Server listening on"
-- Verifies SSHD server started successfully
+Each scenario defines its own `validate_devworkspace()` function with checks tailored to its editor:
 
-**jetbrains** (settings-jetbrains.env):
-- Timeout: 120s
-- Port-forwards to 3400, curls `127.0.0.1:3400`
-- Validates HTTP 200 response from JetBrains landing page
-- On failure, outputs `/idea-server/std.out` for debugging
+| Scenario | Timeout | Validation Checks | Editor Component |
+|----------|---------|-------------------|------------------|
+| sshd | 60s | HTTP 200 on port 3400 via `oc exec` curl (`-m 5`), then `/tmp/sshd.log` for `Server listening on`; on failure dumps `/proc/net/tcp{,6}` via `proc_tcp` for socket diagnostics | che-code-sshd-page |
+| jetbrains | 120s | HTTP 200 on port 3400 via `oc exec` curl (`-m 5`) | editor-injector |
+| vscode | 120s | HTTP 200 on port 3100 via `oc exec` curl (`-m 5`), dumps `/checode/entrypoint-logs.txt` on failure | che-code-injector |
 
-**vscode** (settings-vscode.env):
-- Timeout: 60s
-- Checks `/checode/entrypoint-logs.txt` for "Extension host agent listening on 3100"
-- Verifies VSCode extension host is listening
+All scenarios use `oc exec` with in-pod `curl` for validation (no port-forwarding). `validate_devworkspace()` takes no arguments — it uses global variables set by the main loop.
 
 ### DevWorkspace Generation
 
-Uses `devworkspace-template.yaml` as base, performs sed substitutions in two stages:
+Uses `devworkspace-template.yaml` as base. The template uses ephemeral storage (`controller.devfile.io/storage-type: ephemeral`) to avoid PVC provisioning overhead during tests.
 
-**Stage 1** - Metadata and devfile injection:
+Substitutions are performed in two stages:
+
+**Stage 1** - Metadata, devfile, and projects injection:
 ```bash
 cat devworkspace-template.yaml | sed \
-  -e "/DEVFILE/r ${TMP_DEVFILE}" \    # Inject devfile content
-  -e '/DEVFILE/ d' \                  # Remove DEVFILE placeholder
+  -e "/DEVFILE/r ${TMP_DEVFILE}" \       # Inject devfile content
+  -e '/DEVFILE/ d' \                     # Remove DEVFILE placeholder
+  -e "/PROJECTS/r ${TMP_PROJECTS}" \     # Inject projects block
+  -e '/PROJECTS/ d' \                   # Remove PROJECTS placeholder
   -e "s|DEVWORKSPACE_NAME|...|" \
   -e "s|DEVWORKSPACE_NS|...|" \
-  -e "s|EDITOR_DEFINITION|...|" \
+  -e "${EDITOR_SED_EXPR}" \             # Editor definition (uri or kubernetes ref)
   -e "s|PROJECT_URL|...|"
 ```
 
@@ -122,6 +121,27 @@ eval "sed \"s|image: .*|image: ${image}|\" > ${TMP_DEVWORKSPACE}"
 ```
 
 The two-stage approach ensures devfile content is injected before image replacement.
+
+**Devfile fetch**: Each devfile URL is fetched with `curl` and the HTTP status code is checked. If the fetch fails (non-200), the devfile is skipped and recorded as a failure.
+
+**Projects handling**: If the devfile contains `starterProjects`, those are extracted and converted into a `projects:` block. Otherwise, the scenario's `PROJECT_URL` is used as a fallback sample project.
+
+**Editor contribution**: When using `-p` or `-i` (override image), the editor contribution switches from `uri:` to `kubernetes: name:` referencing the applied DevWorkspaceTemplate.
+
+### DevWorkspace Lifecycle Management
+
+After each test, `cleanup_test()` handles the workspace depending on its current state:
+
+- **Running / Starting**: Gracefully stops by patching `spec.started: false` and waiting up to `TIMEOUT/4` seconds for `Stopped` state.
+- **Failed**: Force-deletes the workspace (`oc delete dw`) and waits for all associated pods to terminate before returning. This prevents stale pods from interfering with the next test's pod resolution.
+- **Stopped / not found**: No action needed.
+- **Debug mode**: `cleanup_test()` is skipped entirely to allow resource inspection.
+
+`cleanup_test()` runs after every test iteration (both pass and fail paths), not just at the end of the suite.
+
+At the end of the suite, `cleanup_suite()` deletes the DevWorkspace, any override DevWorkspaceTemplate, and temporary files (skipped in debug mode).
+
+The wait loop now detects both `Running` and `Failed` states, breaking early on failure instead of waiting for the full timeout. When a DevWorkspace fails to start, the script logs the failure reason from `.status.message`.
 
 ### Logging and Output Control
 
@@ -140,51 +160,34 @@ Tracks test execution time using bash's `$SECONDS` variable:
 
 ```
 settings/
-  settings-sshd.env       # SSHD scenario: timeout=60s, validates /tmp/sshd.log
-  settings-jetbrains.env  # JetBrains scenario: timeout=120s, validates port 3400
-  settings-vscode.env     # VSCode scenario: timeout=60s, validates /checode/entrypoint-logs.txt
+  settings-sshd.env       # SSHD scenario: timeout=60s, port 3400
+  settings-jetbrains.env  # JetBrains scenario: timeout=120s, port 3400
+  settings-vscode.env     # VSCode scenario: timeout=120s, port 3100
 
 images/
-  images.txt              # Quick test list (3 UDI images: ubi8, ubi9, ubi10)
-  images-full.txt         # Complete test matrix (UDI + base-developer-image variants)
+  images.txt              # Default test list (UDI images: ubi8, ubi9, ubi10)
+  images-full.txt         # Complete test matrix (227 images including UDI, base-developer-image, and UBI 8/9/10 variants)
 
 devfiles/
-  devfiles.txt            # Quick test list (nodejs, go, python, php-laravel and java-quarkus devfile)
-  devfiles-full.txt       # Complete devfile list (32 devfiles from devfile registry)
+  devfiles.txt            # Default test list (nodejs, go, php-laravel, python, java-maven)
+  devfiles-full.txt       # Complete devfile list (30 devfiles from devfile registry including java-maven, ollama, openclaw, picoclaw, zeroclaw)
 
 samples/
   samples.txt             # Sample project URLs (currently unused)
   samples-full.txt        # Extended sample project list (currently unused)
 
-devworkspace-template.yaml  # Base template with placeholders
+devworkspace-template.yaml  # Base template with placeholders (ephemeral storage)
 dw-auto-validate.sh        # Main validation orchestrator
 verify_images.sh           # Skopeo-based image accessibility checker
 ```
 
 ## Implementation Details
 
-### Validation Function Pattern
+### Validation Function
 
-All `validate_devworkspace()` functions follow this pattern:
+Each scenario defines its own `validate_devworkspace()` function in its settings file. All scenarios call `resolve_devworkspace_pod()` to set `podName` and `mainContainerName` globals, then perform scenario-specific checks (landing page HTTP check, log file scraping, or both).
 
-```bash
-validate_devworkspace() {
-  devfile_url=$1  # Receives devfile URL as first argument
-
-  # Resolve pod and container via shared helper
-  resolve_devworkspace_pod || return 1
-
-  # Scenario-specific validation logic here
-  # Return 0 for pass, 1 for fail
-}
-```
-
-The shared `resolve_devworkspace_pod()` function sets `podName` and `mainContainerName` globals.
-
-**Critical details**:
-- Has access to `${DEVWORKSPACE_NS}`, `${DEVWORKSPACE_NAME}`, `log()`
-- Must return 0 for success, 1 for failure
-- Should use `&>/dev/null` on oc exec commands meant only for exit code checking
+`resolve_devworkspace_pod()` finds the pod by DevWorkspace label (filtering for `status.phase=Running` to exclude terminating pods) and selects the main container from pod status, filtering out containers whose name starts with `che-`.
 
 ### Variable Quoting Requirements
 
@@ -199,31 +202,33 @@ git:
 
 ### Common DevWorkspace Patterns
 
-**Waiting for Running state**:
+**Waiting for Running or Failed state**:
 ```bash
 state=""
 count=0
-while [ "${state}" != "Running" ] && [ ${count} -lt ${TIMEOUT} ]; do
+while [ "${state}" != "Running" ] && [ "${state}" != "Failed" ] && [ ${count} -lt ${TIMEOUT} ]; do
   state=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.phase}')
   sleep 1s
   count=$((count+1))
 done
 ```
 
-**Finding pod by DevWorkspace label**:
+The loop exits early on `Failed` state, avoiding unnecessary waits for workspaces that will never start.
+
+**Finding pod by DevWorkspace label** (filtered to Running pods only):
 ```bash
-podNameAndDWName=$(oc get pods -o 'jsonpath={range .items[*]}{.metadata.name}{","}{.metadata.labels.controller\.devfile\.io/devworkspace_name}{end}')
-podName=$(echo ${podNameAndDWName} | grep ${DEVWORKSPACE_NAME} | cut -d, -f1)
+podNameAndDWName=$(oc get pods --field-selector=status.phase=Running -o 'jsonpath={range .items[*]}{.metadata.name}{","}{.metadata.labels.controller\.devfile\.io/devworkspace_name}{"\n"}{end}')
+podName=$(echo "${podNameAndDWName}" | grep ${DEVWORKSPACE_NAME} | head -1 | cut -d, -f1)
 ```
 
-**Getting main container name**:
+**Getting main container name** (from pod status, excluding `che-*` containers):
 ```bash
-mainContainerName=$(oc get devworkspace ${DEVWORKSPACE_NAME} -o json | jq -r '[.spec.template.components[] | select(.container) | .name] | first')
+mainContainerName=$(oc get pod "${podName}" -o json | jq -r '[.status.containerStatuses[] | select(.state.running and (.name | test("^che-") | not))] | first | .name // empty')
 ```
 
 ### Adding a New Scenario
 
 1. Create `settings/settings-<name>.env`
-2. Export required variables: `TIMEOUT`, `DEVWORKSPACE_NAME`, `PROJECT_URL`, `EDITOR_DEFINITION`
-3. Implement `validate_devworkspace()` function that returns 0/1
-4. Update scenario selection in dw-auto-validate.sh (add option, update prompts)
+2. Export required variables: `TIMEOUT`, `DEVWORKSPACE_NAME`, `PROJECT_URL`, `EDITOR_DEFINITION`, `EDITOR_COMPONENT_NAME`, `EXCLUDED_IMAGE_PATTERNS`
+3. Define a `validate_devworkspace()` function with scenario-specific validation checks
+3. Update scenario selection in dw-auto-validate.sh (add option, update prompts and `-s` validation)

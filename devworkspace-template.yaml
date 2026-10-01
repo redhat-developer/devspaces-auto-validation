@@ -7,12 +7,10 @@ spec:
   started: true
   routingClass: che # thanks claude
   template:
+    attributes:
+      controller.devfile.io/storage-type: ephemeral
     DEVFILE
-    projects:
-      - name: project-sample
-        git:
-          remotes:
-            origin: PROJECT_URL
+    PROJECTS
 
   contributions:
     - name: editor-definition-component

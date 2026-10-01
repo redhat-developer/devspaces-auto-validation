@@ -1,5 +1,3 @@
-https://github.com/che-samples/web-nodejs-sample
-https://github.com/che-samples/nodejs-mongodb-sample
 https://github.com/devfile-samples/devfile-stack-go
 https://github.com/devfile-samples/devfile-stack-nodejs-angular
 https://github.com/devfile-samples/devfile-stack-nodejs-nextjs
@@ -8,6 +6,15 @@ https://github.com/devfile-samples/devfile-stack-nodejs-svelte
 https://github.com/devfile-samples/devfile-stack-nodejs-vue
 https://github.com/devfile-samples/devfile-stack-php-laravel
 https://github.com/devfile-samples/devfile-stacks-nodejs-react
+https://github.com/devfile-samples/devfile-sample-code-with-quarkus
+https://github.com/devfile-samples/devfile-sample-dotnet60-basic
+https://github.com/devfile-samples/devfile-sample-go-basic
+https://github.com/devfile-samples/devfile-sample-java-springboot-basic
+https://github.com/devfile-samples/devfile-sample-python-basic
+https://github.com/devfile-samples/node-express-hello-devfile-no-dockerfile
+https://github.com/devfile-samples/nodejs-ex
+https://github.com/devfile-samples/nodejs-mongodb-sample
+https://github.com/devfile-samples/web-coolstore
 https://github.com/devfile-samples/python-django-ex
 https://github.com/devfile-samples/python-ex
 https://github.com/devfile-samples/springboot-ex
@@ -37,3 +44,4 @@ https://github.com/wildfly-extras/wildfly-devfile-examples
 https://github.com/wildfly/quickstart
 https://github.com/RedHat-Middleware-Workshops/devsandbox-camel
 https://github.com/che-incubator/quarkus-api-example
+
