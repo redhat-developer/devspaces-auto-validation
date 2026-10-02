@@ -70,7 +70,7 @@ Automated validation tool for testing DevWorkspace instances on OpenShift cluste
 - `-i <IMAGE>`: Test a custom editor image — same mechanism as `-p` but with an arbitrary image reference (mutually exclusive with `-p`)
 - `-h`: Help - displays usage information
 
-**Debug mode specifics**: Sets `DEBUG=1`, `FULL=0`, `VERBOSE=1`, runs only the first test iteration (`[[ ${DEBUG} -eq 1 && ${total_count} -ge 1 ]] && break`), skips cleanup to allow resource inspection.
+**Debug mode specifics**: Sets `DEBUG=1`, `FULL=0`, `VERBOSE=1`, runs only the first test iteration (inner image loop uses `[[ ${DEBUG} -eq 1 && ${total_count} == 1 ]] && continue`, outer devfile loop uses `[[ ${DEBUG} -eq 1 && ${total_count} -ge 1 ]] && break`), skips cleanup to allow resource inspection.
 
 ### Scenarios
 
@@ -90,7 +90,7 @@ Each scenario defines its own `validate_devworkspace()` function with checks tai
 
 | Scenario | Timeout | Validation Checks | Editor Component |
 |----------|---------|-------------------|------------------|
-| sshd | 60s | HTTP 200 on port 3400 via `oc exec` curl (`-m 5`), then `/tmp/sshd.log` for `Server listening on`; on failure dumps `/proc/net/tcp{,6}` via `proc_tcp` for socket diagnostics | che-code-sshd-page |
+| sshd | 60s | HTTP 200 on port 3400 via `oc exec` curl (`-m 5`), then `/tmp/sshd.log` for `Server listening on`; on failure dumps `/proc/net/tcp{,6}` via `proc_tcp` for socket diagnostics, and `/tmp/poststart-stdout.txt` + `/tmp/poststart-stderr.txt` | che-code-sshd-page |
 | jetbrains | 120s | HTTP 200 on port 3400 via `oc exec` curl (`-m 5`) | editor-injector |
 | vscode | 120s | HTTP 200 on port 3100 via `oc exec` curl (`-m 5`), dumps `/checode/entrypoint-logs.txt` on failure | che-code-injector |
 
@@ -169,7 +169,7 @@ settings/
 
 images/
   images.txt              # Default test list (UDI images: ubi8, ubi9, ubi10)
-  images-full.txt         # Complete test matrix (227 images including UDI, base-developer-image, and UBI 8/9/10 variants)
+  images-full.txt         # Complete test matrix (219 images including UDI, base-developer-image, and UBI 8/9/10 variants)
 
 devfiles/
   devfiles.txt            # Default test list (nodejs, go, php-laravel, python, java-maven)
