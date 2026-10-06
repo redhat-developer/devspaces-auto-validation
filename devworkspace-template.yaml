@@ -8,7 +8,7 @@ spec:
   routingClass: che # thanks claude
   template:
     attributes:
-      controller.devfile.io/storage-type: ephemeral
+      controller.devfile.io/storage-type: per-user
     DEVFILE
     PROJECTS
 
