@@ -36,21 +36,55 @@ jobs:
       max-parallel: 3
       matrix:
         include:
+          # chunk 1: all scenarios
           - scenario: vscode
             image: ''
             mode: main
             chunk: 1
             total_chunks: 4
+          - scenario: sshd
+            image: ''
+            mode: main
+            chunk: 1
+            total_chunks: 4
+          - scenario: jetbrains
+            image: ''
+            mode: main
+            chunk: 1
+            total_chunks: 4
+          # chunk 2: all scenarios
           - scenario: vscode
             image: ''
             mode: main
             chunk: 2
             total_chunks: 4
+          - scenario: sshd
+            image: ''
+            mode: main
+            chunk: 2
+            total_chunks: 4
+          - scenario: jetbrains
+            image: ''
+            mode: main
+            chunk: 2
+            total_chunks: 4
+          # chunk 3: all scenarios
           - scenario: vscode
             image: ''
             mode: main
             chunk: 3
             total_chunks: 4
+          - scenario: sshd
+            image: ''
+            mode: main
+            chunk: 3
+            total_chunks: 4
+          - scenario: jetbrains
+            image: ''
+            mode: main
+            chunk: 3
+            total_chunks: 4
+          # chunk 4: all scenarios
           - scenario: vscode
             image: ''
             mode: main
@@ -59,37 +93,7 @@ jobs:
           - scenario: sshd
             image: ''
             mode: main
-            chunk: 1
-            total_chunks: 4
-          - scenario: sshd
-            image: ''
-            mode: main
-            chunk: 2
-            total_chunks: 4
-          - scenario: sshd
-            image: ''
-            mode: main
-            chunk: 3
-            total_chunks: 4
-          - scenario: sshd
-            image: ''
-            mode: main
             chunk: 4
-            total_chunks: 4
-          - scenario: jetbrains
-            image: ''
-            mode: main
-            chunk: 1
-            total_chunks: 4
-          - scenario: jetbrains
-            image: ''
-            mode: main
-            chunk: 2
-            total_chunks: 4
-          - scenario: jetbrains
-            image: ''
-            mode: main
-            chunk: 3
             total_chunks: 4
           - scenario: jetbrains
             image: ''
