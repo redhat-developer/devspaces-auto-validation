@@ -170,7 +170,7 @@ cleanup_test() {
       log -n "."
     done
     stop_spin
-    log " deleted."
+    log "\n${GREEN}deleted.${NC}"
   elif [ "${current_phase}" == "Running" ] || [ "${current_phase}" == "Starting" ]; then
     run_cmd oc patch dw "${DEVWORKSPACE_NAME}" --type merge -p '{"spec":{"started":false}}'
     log -n "Stopping ${DEVWORKSPACE_NAME} ."
@@ -186,7 +186,7 @@ cleanup_test() {
     if [ ${stop_count} -ge ${stop_timeout} ]; then
       log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to stop (timed out after ${stop_timeout}s)${NC}"
     fi
-    log " stopped."
+    log "\n${GREEN}stopped.${NC}"
   fi
 }
 
@@ -258,9 +258,7 @@ if [ -n "${CUSTOM_IMAGE}" ]; then
 fi
 
 OVERRIDE_IMAGE=""
-if [ -n "${PR_NUMBER}" ]; then
-  OVERRIDE_IMAGE="quay.io/che-incubator-pull-requests/che-code:pr-${PR_NUMBER}-amd64"
-elif [ -n "${CUSTOM_IMAGE}" ]; then
+if [ -n "${CUSTOM_IMAGE}" ]; then
   OVERRIDE_IMAGE="${CUSTOM_IMAGE}"
 fi
 
@@ -300,6 +298,24 @@ fi
 # Read values from scenario's setting
 # shellcheck source=settings/settings-vscode.env
 . settings/settings-"${SCENARIO}".env
+
+# Resolve PR image now that scenario is known
+if [ -n "${PR_NUMBER}" ]; then
+  if [ "${SCENARIO}" == "jetbrains" ]; then
+    PR_IMAGE="quay.io/che-incubator-pull-requests/che-idea-dev-server:pr-${PR_NUMBER}"
+  else
+    PR_IMAGE="quay.io/che-incubator-pull-requests/che-code:pr-${PR_NUMBER}-amd64"
+  fi
+  echo -e "\n${BLUE}Checking PR image...${NC}"
+  log "Executing 'skopeo inspect'..."
+  eval skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${PR_IMAGE}" "${QUIET}"
+  if [ $? -ne 0 ]; then
+    echo -e "${RED}Error:${NC} PR image '${PR_IMAGE}' not found. Make sure the GitHub Action has published the image." >&2
+    exit 1
+  fi
+  echo -e "${GREEN}Ok!${NC}"
+  OVERRIDE_IMAGE="${PR_IMAGE}"
+fi
 
 # user namespace where testing will occur
 DEVWORKSPACE_NS=$(oc project -q)
