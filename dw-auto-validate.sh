@@ -43,16 +43,21 @@ run_cmd() {
 
 SPINNER_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 SPINNER_PID=""
+SPINNER_MSG_FILE=$(mktemp /tmp/spinner-msg-XXXXXX)
 TEST_LABEL=""
 
 start_spin() {
   [ ${VERBOSE} -eq 1 ] && return
-  stop_spin
-  local msg="${1}"
+  echo "${1}" > "${SPINNER_MSG_FILE}"
+  if [ -n "${SPINNER_PID}" ] && kill -0 "${SPINNER_PID}" 2>/dev/null; then
+    return
+  fi
   (
     local idx=0
     while true; do
-      printf "\r%s %s — %s " "${SPINNER_CHARS:idx:1}" "${TEST_LABEL}" "${msg}"
+      local msg
+      msg=$(cat "${SPINNER_MSG_FILE}" 2>/dev/null)
+      printf "\r\033[K%s %s — %s " "${SPINNER_CHARS:idx:1}" "${TEST_LABEL}" "${msg}"
       idx=$(( (idx + 1) % ${#SPINNER_CHARS} ))
       sleep 0.1
     done
@@ -170,7 +175,7 @@ cleanup_test() {
       log -n "."
     done
     stop_spin
-    log " deleted."
+    log "\n${GREEN}deleted.${NC}"
   elif [ "${current_phase}" == "Running" ] || [ "${current_phase}" == "Starting" ]; then
     run_cmd oc patch dw "${DEVWORKSPACE_NAME}" --type merge -p '{"spec":{"started":false}}'
     log -n "Stopping ${DEVWORKSPACE_NAME} ."
@@ -186,7 +191,7 @@ cleanup_test() {
     if [ ${stop_count} -ge ${stop_timeout} ]; then
       log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to stop (timed out after ${stop_timeout}s)${NC}"
     fi
-    log " stopped."
+    log "\n${GREEN}stopped.${NC}"
   fi
 }
 
@@ -258,9 +263,7 @@ if [ -n "${CUSTOM_IMAGE}" ]; then
 fi
 
 OVERRIDE_IMAGE=""
-if [ -n "${PR_NUMBER}" ]; then
-  OVERRIDE_IMAGE="quay.io/che-incubator-pull-requests/che-code:pr-${PR_NUMBER}-amd64"
-elif [ -n "${CUSTOM_IMAGE}" ]; then
+if [ -n "${CUSTOM_IMAGE}" ]; then
   OVERRIDE_IMAGE="${CUSTOM_IMAGE}"
 fi
 
@@ -300,6 +303,24 @@ fi
 # Read values from scenario's setting
 # shellcheck source=settings/settings-vscode.env
 . settings/settings-"${SCENARIO}".env
+
+# Resolve PR image now that scenario is known
+if [ -n "${PR_NUMBER}" ]; then
+  if [ "${SCENARIO}" == "jetbrains" ]; then
+    PR_IMAGE="quay.io/che-incubator-pull-requests/che-idea-dev-server:pr-${PR_NUMBER}"
+  else
+    PR_IMAGE="quay.io/che-incubator-pull-requests/che-code:pr-${PR_NUMBER}-amd64"
+  fi
+  echo -e "\n${BLUE}Checking PR image...${NC}"
+  log "Executing 'skopeo inspect'..."
+  eval skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${PR_IMAGE}" "${QUIET}"
+  if [ $? -ne 0 ]; then
+    echo -e "${RED}Error:${NC} PR image '${PR_IMAGE}' not found. Make sure the GitHub Action has published the image." >&2
+    exit 1
+  fi
+  echo -e "${GREEN}Ok!${NC}"
+  OVERRIDE_IMAGE="${PR_IMAGE}"
+fi
 
 # user namespace where testing will occur
 DEVWORKSPACE_NS=$(oc project -q)
@@ -465,13 +486,12 @@ PROJEOF
     # here is the replacement of the container image used in the devfile from an image in the list
     eval "sed \"s|image: .*|image: ${image}|\" > ${TMP_DEVWORKSPACE}"
     run_cmd oc apply -f "${TMP_DEVWORKSPACE}"
-    stop_spin
     state=""
     log -n "Waiting for ${DEVWORKSPACE_NAME} to run ."
     count=0
     while [ "${state}" != "Running" ] && [ "${state}" != "Failed" ] && [ ${count} -lt ${TIMEOUT} ]; do
       state=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.phase}')
-      start_spin "Waiting for pod status... [${state:-Pending}]"
+      start_spin "Waiting for [Running] pod state... [Currently: ${state:-Pending}]"
       sleep 1s
       log -n "."
       count=$((count+1))
@@ -487,6 +507,8 @@ PROJEOF
       else
         log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start (timed out after ${TIMEOUT}s, last state: ${state})${NC}"
       fi
+      cleanup_test
+      stop_spin
       if shouldExclude "${image}"; then
         echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌ (EXCLUDED ↩️ )"
         excluded_test+=("Devfile '$devfile_url' using image '$image'")
@@ -494,18 +516,20 @@ PROJEOF
         log -f "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌"
         failed_test+=("Devfile '$devfile_url' using image '$image'")
       fi
-      cleanup_test
       continue
     fi
     log "Validating ${DEVWORKSPACE_NAME} .."
     start_spin "Validating..."
     validate_devworkspace
     validate_rc=$?
-    stop_spin
     if [ ${validate_rc} -eq 0 ]; then
+      cleanup_test
+      stop_spin
       log -f "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} PASSED ✅"
       ((success_count++))
     else
+      cleanup_test
+      stop_spin
       if shouldExclude "${image}"; then
         log -f "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌ (EXCLUDED ↩️ )"
         excluded_test+=("Devfile '$devfile_url' using image '$image'")
@@ -514,7 +538,6 @@ PROJEOF
         failed_test+=("Devfile '$devfile_url' using image '$image'")
       fi
     fi
-    cleanup_test
     sleep 1s
   done # image loop
   [[ ${DEBUG} -eq 1 && ${total_count} -ge 1 ]] && break
