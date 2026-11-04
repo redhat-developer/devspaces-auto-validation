@@ -100,6 +100,17 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: 'redhat-developer/devspaces-auto-validation'
+      - name: Mask OpenShift credentials
+        if: steps.should-run.outputs.run == 'true'
+        env:
+          OC_SERVER: ${{ inputs.OC_SERVER }}
+          OC_TOKEN: ${{ inputs.OC_TOKEN }}
+          OC_PROJECT: ${{ inputs.OC_PROJECT }}
+        run: |
+          [ -n "$OC_SERVER" ] && echo "::add-mask::$OC_SERVER"
+          [ -n "$OC_TOKEN" ] && echo "::add-mask::$OC_TOKEN"
+          [ -n "$OC_PROJECT" ] && echo "::add-mask::$OC_PROJECT"
+          exit 0
       - name: Login to OpenShift
         if: steps.should-run.outputs.run == 'true'
         uses: redhat-actions/oc-login@v2
