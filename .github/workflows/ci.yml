@@ -119,7 +119,7 @@ jobs:
           if [ "${{ inputs.EDITOR_DEFINITION_JETBRAINS }}" != '' ]; then
             sed -i "s|https://.*\.yaml|${{ inputs.EDITOR_DEFINITION_JETBRAINS }}|" settings/settings-jetbrains.env
           fi
-          cp images/images-full.txt images/images.txt
+          cp images/images-simple.txt images/images.txt
           sed -i '/nodejs/!d' devfiles/devfiles.txt
           EXTRA_ARGS=""
           if [ "${{ matrix.mode }}" == "image" ]; then
