@@ -204,6 +204,12 @@ shouldExclude() {
   return 1
 }
 
+# Detects whether a command's output indicates the cluster session has been
+# lost (token expired / Unauthorized). Returns 0 (true) when it has.
+is_auth_lost() {
+  echo "${1}" | grep -qiE "Unauthorized|must be logged in to the server"
+}
+
 ########
 # Main #
 ########
@@ -406,6 +412,7 @@ log -f "Logging into: ${BLUE}${LOG_FILE}${NC}"
 failed_test=()
 success_count=0
 total_count=0
+AUTH_LOST=0
 
 # Start timing
 START_TIME=$SECONDS
@@ -485,7 +492,17 @@ PROJEOF
     # Modify the result (must be separate)
     # here is the replacement of the container image used in the devfile from an image in the list
     eval "sed \"s|image: .*|image: ${image}|\" > ${TMP_DEVWORKSPACE}"
-    run_cmd oc apply -f "${TMP_DEVWORKSPACE}"
+    apply_output=$(oc apply -f "${TMP_DEVWORKSPACE}" 2>&1)
+    [ ${VERBOSE} -eq 1 ] && echo -e "${apply_output}"
+    echo -e "${apply_output}" | sed "${STRIP_ANSI}" >> "${LOG_FILE}"
+    # Fail fast: if the cluster session has expired, every remaining test will
+    # fail the same way. Abort the whole suite instead of grinding through them.
+    if is_auth_lost "${apply_output}"; then
+      stop_spin
+      log -f "\n${RED}Error:${NC} Lost cluster session (Unauthorized / token expired). Aborting remaining tests. ⛔"
+      AUTH_LOST=1
+      break
+    fi
     state=""
     log -n "Waiting for ${DEVWORKSPACE_NAME} to run ."
     count=0
@@ -540,6 +557,7 @@ PROJEOF
     fi
     sleep 1s
   done # image loop
+  [[ ${AUTH_LOST} -eq 1 ]] && break
   [[ ${DEBUG} -eq 1 && ${total_count} -ge 1 ]] && break
 done # devfile loop
 
@@ -598,9 +616,14 @@ if [ ${#failed_test[@]} -gt 0 ]; then
   done
 fi
 
+if [ ${AUTH_LOST} -eq 1 ]; then
+  log -f ""
+  log -f "${RED}Run aborted early:${NC} cluster session was lost (Unauthorized). Not all tests were executed."
+fi
+
 log -f ""
 log -f "Log file: ${BLUE}${LOG_FILE}${NC}"
 
-if [ ${#failed_test[@]} -gt 0 ]; then
+if [ ${#failed_test[@]} -gt 0 ] || [ ${AUTH_LOST} -eq 1 ]; then
   exit 1
 fi
