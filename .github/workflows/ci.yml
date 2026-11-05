@@ -33,7 +33,7 @@ jobs:
   dw-auto-validate:
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 3
       matrix:
         include:
           - scenario: vscode
@@ -118,6 +118,7 @@ jobs:
           openshift_server_url: ${{ inputs.OC_SERVER || secrets.OC_SERVER }}
           openshift_token: ${{ inputs.OC_TOKEN || secrets.OC_TOKEN }}
           namespace: ${{ inputs.OC_PROJECT || secrets.OC_PROJECT }}
+          logout: false
       - name: Run Dev Spaces Auto Validation
         if: steps.should-run.outputs.run == 'true'
         run: |
