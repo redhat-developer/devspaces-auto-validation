@@ -33,7 +33,7 @@ jobs:
   dw-auto-validate:
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 1
       matrix:
         include:
           - scenario: vscode
@@ -108,8 +108,11 @@ jobs:
           OC_PROJECT: ${{ inputs.OC_PROJECT }}
         run: |
           [ -n "$OC_SERVER" ] && echo "::add-mask::$OC_SERVER"
+          echo "MASKED_OC_SERVER=$OC_SERVER" >> $GITHUB_ENV
           [ -n "$OC_TOKEN" ] && echo "::add-mask::$OC_TOKEN"
+          echo "MASKED_OC_TOKEN=$OC_TOKEN" >> $GITHUB_ENV
           [ -n "$OC_PROJECT" ] && echo "::add-mask::$OC_PROJECT"
+          echo "MASKED_OC_PROJECT=$OC_PROJECT" >> $GITHUB_ENV
           exit 0
       - name: Login to OpenShift
         if: steps.should-run.outputs.run == 'true'
