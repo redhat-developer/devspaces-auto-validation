@@ -25,8 +25,11 @@ on:
         description: 'Run image matrix entries (with custom editor images)'
         type: boolean
         default: true
-      PR_NUMBER:
-        description: 'PR number to test (che-code or jetbrains-ide-dev-server, runs PR image matrix)'
+      PR_NUMBER_CHE_CODE:
+        description: 'che-incubator/che-code PR number (runs vscode + sshd against the PR image)'
+        type: string
+      PR_NUMBER_JETBRAINS:
+        description: 'che-incubator/jetbrains-ide-dev-server PR number (runs jetbrains against the PR image)'
         type: string
 
 jobs:
@@ -40,7 +43,8 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           RUN_IMAGE_MATRIX: ${{ inputs.RUN_IMAGE_MATRIX }}
-          PR_NUMBER: ${{ inputs.PR_NUMBER }}
+          PR_NUMBER_CHE_CODE: ${{ inputs.PR_NUMBER_CHE_CODE }}
+          PR_NUMBER_JETBRAINS: ${{ inputs.PR_NUMBER_JETBRAINS }}
         run: |
           main='[
             {"scenario":"vscode","image":"","mode":"main"},
@@ -52,16 +56,23 @@ jobs:
             {"scenario":"sshd","image":"quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-sshd-rhel9:latest","mode":"image"},
             {"scenario":"jetbrains","image":"quay.io/redhat-user-workloads/devspaces-tenant/devspaces/jetbrains-ide-rhel9:latest","mode":"image"}
           ]'
-          pr='[
-            {"scenario":"vscode","image":"","mode":"pr"},
-            {"scenario":"sshd","image":"","mode":"pr"},
-            {"scenario":"jetbrains","image":"","mode":"pr"}
-          ]'
 
           include="$main"
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            if [ -n "$PR_NUMBER" ]; then
-              include=$(jq -c -n --argjson a "$include" --argjson b "$pr" '$a + $b')
+            if [ -n "$PR_NUMBER_CHE_CODE" ] || [ -n "$PR_NUMBER_JETBRAINS" ]; then
+              if [ -n "$PR_NUMBER_CHE_CODE" ]; then
+                pr_che=$(jq -c -n --arg n "$PR_NUMBER_CHE_CODE" '[
+                  {scenario:"vscode",image:"",mode:"pr",pr_number:$n},
+                  {scenario:"sshd",image:"",mode:"pr",pr_number:$n}
+                ]')
+                include=$(jq -c -n --argjson a "$include" --argjson b "$pr_che" '$a + $b')
+              fi
+              if [ -n "$PR_NUMBER_JETBRAINS" ]; then
+                pr_jb=$(jq -c -n --arg n "$PR_NUMBER_JETBRAINS" '[
+                  {scenario:"jetbrains",image:"",mode:"pr",pr_number:$n}
+                ]')
+                include=$(jq -c -n --argjson a "$include" --argjson b "$pr_jb" '$a + $b')
+              fi
             elif [ "$RUN_IMAGE_MATRIX" = "true" ]; then
               include=$(jq -c -n --argjson a "$include" --argjson b "$image" '$a + $b')
             fi
@@ -119,6 +130,6 @@ jobs:
           if [ "${{ matrix.mode }}" == "image" ]; then
             EXTRA_ARGS="-i ${{ matrix.image }}"
           elif [ "${{ matrix.mode }}" == "pr" ]; then
-            EXTRA_ARGS="-p ${{ inputs.PR_NUMBER }}"
+            EXTRA_ARGS="-p ${{ matrix.pr_number }}"
           fi
           ./dw-auto-validate.sh -v -s ${{ matrix.scenario }} ${EXTRA_ARGS}
