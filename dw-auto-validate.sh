@@ -234,27 +234,6 @@ else
   log -f "${GREEN}Ok!${NC}"
 fi
 
-if [ -n "${PR_NUMBER}" ]; then
-  # Verify the PR image exists
-  PR_IMAGE="quay.io/che-incubator-pull-requests/che-code:pr-${PR_NUMBER}-amd64"
-  log -f "\n${BLUE}Checking skopeo installation...${NC}"
-  log "Executing 'which skopeo'..."
-  if ! [ -x "$(command -v skopeo)" ]; then
-    log -f "${RED}Error:${NC} skopeo is not installed. Please install skopeo package." >&2
-    exit 1
-  else
-    log -f "${GREEN}Ok!${NC}"
-    log -f "\n${BLUE}Checking PR image...${NC}"
-    log "Executing 'skopeo inspect'..."
-    run_cmd skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${PR_IMAGE}"
-    if [ $? -ne 0 ]; then
-      log -f "${RED}Error:${NC} PR image '${PR_IMAGE}' not found. Make sure the GitHub Action has published the image." >&2
-      exit 1
-    fi
-    log -f "${GREEN}Ok!${NC}"
-  fi
-fi
-
 if [ -n "${CUSTOM_IMAGE}" ]; then
   if [ -x "$(command -v skopeo)" ]; then
     log -f "\n${BLUE}Checking custom image...${NC}"
@@ -317,14 +296,14 @@ if [ -n "${PR_NUMBER}" ]; then
   else
     PR_IMAGE="quay.io/che-incubator-pull-requests/che-code:pr-${PR_NUMBER}-amd64"
   fi
-  echo -e "\n${BLUE}Checking PR image...${NC}"
+  log -f "\n${BLUE}Checking PR image...${NC}"
   log "Executing 'skopeo inspect'..."
-  eval skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${PR_IMAGE}" "${QUIET}"
+  run_cmd skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${PR_IMAGE}"
   if [ $? -ne 0 ]; then
-    echo -e "${RED}Error:${NC} PR image '${PR_IMAGE}' not found. Make sure the GitHub Action has published the image." >&2
+    log -f "${RED}Error:${NC} PR image '${PR_IMAGE}' not found. Make sure the GitHub Action has published the image." >&2
     exit 1
   fi
-  echo -e "${GREEN}Ok!${NC}"
+  log -f "${GREEN}Ok!${NC}"
   OVERRIDE_IMAGE="${PR_IMAGE}"
 fi
 
@@ -407,7 +386,7 @@ done < ${DEVFILE_LIST_PATH}
 #Run the tests now that everything is set up
 CURRENT_SERVER=$(oc whoami --show-server)
 log -f "\n${BLUE}Running test scenario '${SCENARIO}' using ${DEVWORKSPACE_NAME} devworkspace in ${DEVWORKSPACE_NS} namespace against server ${CURRENT_SERVER}...${NC}"
-log -f "Logging into: ${BLUE}${LOG_FILE}${NC}"
+log -f "Full logs can be found in: ${BLUE}${LOG_FILE}${NC}"
 
 failed_test=()
 success_count=0
