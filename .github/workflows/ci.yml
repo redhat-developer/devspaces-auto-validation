@@ -100,12 +100,13 @@ jobs:
           repository: 'redhat-developer/devspaces-auto-validation'
       - name: Mask OpenShift credentials
         run: |
-          for key in OC_SERVER OC_TOKEN OC_PROJECT; do
-            value=$(jq -r --arg k "$key" '.inputs[$k] // empty' "$GITHUB_EVENT_PATH")
-            if [ -n "$value" ]; then
-              echo "::add-mask::$value"
-            fi
-          done
+          OC_SERVER=$(jq -r --arg k OC_SERVER '.inputs[$k] // empty' "$GITHUB_EVENT_PATH")
+          [ -n "$OC_SERVER" ] && echo "::add-mask::$OC_SERVER"
+          OC_TOKEN=$(jq -r --arg k OC_TOKEN '.inputs[$k] // empty' "$GITHUB_EVENT_PATH")
+          [ -n "$OC_TOKEN" ] && echo "::add-mask::$OC_TOKEN"
+          OC_PROJECT=$(jq -r --arg k OC_PROJECT '.inputs[$k] // empty' "$GITHUB_EVENT_PATH")
+          [ -n "$OC_PROJECT" ] && echo "::add-mask::$OC_PROJECT"
+          exit 0
       - name: Login to OpenShift
         uses: redhat-actions/oc-login@v2
         with:
