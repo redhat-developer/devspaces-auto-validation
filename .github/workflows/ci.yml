@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       OC_SERVER:
-        description: 'OpenShift cluster API URL (defaults to che-dogfooding)'
+        description: 'OpenShift cluster API URL (defaults to secret)'
         type: string
       OC_TOKEN:
         description: 'OpenShift token (defaults to secret)'
@@ -102,18 +102,11 @@ jobs:
           repository: 'redhat-developer/devspaces-auto-validation'
       - name: Mask OpenShift credentials
         if: steps.should-run.outputs.run == 'true'
-        env:
-          OC_SERVER: ${{ inputs.OC_SERVER }}
-          OC_TOKEN: ${{ inputs.OC_TOKEN }}
-          OC_PROJECT: ${{ inputs.OC_PROJECT }}
         run: |
-          [ -n "$OC_SERVER" ] && echo "::add-mask::$OC_SERVER"
-          echo "MASKED_OC_SERVER=$OC_SERVER" >> $GITHUB_ENV
-          [ -n "$OC_TOKEN" ] && echo "::add-mask::$OC_TOKEN"
-          echo "MASKED_OC_TOKEN=$OC_TOKEN" >> $GITHUB_ENV
-          [ -n "$OC_PROJECT" ] && echo "::add-mask::$OC_PROJECT"
-          echo "MASKED_OC_PROJECT=$OC_PROJECT" >> $GITHUB_ENV
-          exit 0
+          for key in OC_SERVER OC_TOKEN OC_PROJECT; do
+            value=$(jq -r --arg k "$key" '.inputs[$k] // empty' "$GITHUB_EVENT_PATH")
+            [ -n "$value" ] && echo "::add-mask::$value"
+          done
       - name: Login to OpenShift
         if: steps.should-run.outputs.run == 'true'
         uses: redhat-actions/oc-login@v2
