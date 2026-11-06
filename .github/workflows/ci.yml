@@ -1,0 +1,136 @@
+name: Dev Spaces Auto Validation
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      OC_SERVER:
+        description: 'OpenShift cluster API URL (defaults to secret)'
+        type: string
+      OC_TOKEN:
+        description: 'OpenShift token (defaults to secret)'
+        type: string
+      OC_PROJECT:
+        description: 'OpenShift namespace (defaults to secret)'
+        type: string
+      EDITOR_DEFINITION_SSH:
+        description: 'The (optional) editor definition URL for SSHD.'
+        type: string
+      EDITOR_DEFINITION_VSCODE:
+        description: 'The (optional) editor definition URL for VSCODE.'
+        type: string
+      EDITOR_DEFINITION_JETBRAINS:
+        description: 'The (optional) editor definition URL for JETBRAINS.'
+        type: string
+      RUN_IMAGE_MATRIX:
+        description: 'Run image matrix entries (with custom editor images)'
+        type: boolean
+        default: true
+      PR_NUMBER_CHE_CODE:
+        description: 'che-incubator/che-code PR number (runs vscode + sshd against the PR image)'
+        type: string
+      PR_NUMBER_JETBRAINS:
+        description: 'che-incubator/jetbrains-ide-dev-server PR number (runs jetbrains against the PR image)'
+        type: string
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+    steps:
+      - name: Compute matrix
+        id: gen
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_IMAGE_MATRIX: ${{ inputs.RUN_IMAGE_MATRIX }}
+          PR_NUMBER_CHE_CODE: ${{ inputs.PR_NUMBER_CHE_CODE }}
+          PR_NUMBER_JETBRAINS: ${{ inputs.PR_NUMBER_JETBRAINS }}
+        run: |
+          main='[
+            {"scenario":"vscode","image":"","mode":"main"},
+            {"scenario":"sshd","image":"","mode":"main"},
+            {"scenario":"jetbrains","image":"","mode":"main"}
+          ]'
+          image='[
+            {"scenario":"vscode","image":"quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-rhel9:latest","mode":"image"},
+            {"scenario":"sshd","image":"quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-sshd-rhel9:latest","mode":"image"},
+            {"scenario":"jetbrains","image":"quay.io/redhat-user-workloads/devspaces-tenant/devspaces/jetbrains-ide-rhel9:latest","mode":"image"}
+          ]'
+
+          include="$main"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ -n "$PR_NUMBER_CHE_CODE" ] || [ -n "$PR_NUMBER_JETBRAINS" ]; then
+              if [ -n "$PR_NUMBER_CHE_CODE" ]; then
+                pr_che=$(jq -c -n --arg n "$PR_NUMBER_CHE_CODE" '[
+                  {scenario:"vscode",image:"",mode:"pr",pr_number:$n},
+                  {scenario:"sshd",image:"",mode:"pr",pr_number:$n}
+                ]')
+                include=$(jq -c -n --argjson a "$include" --argjson b "$pr_che" '$a + $b')
+              fi
+              if [ -n "$PR_NUMBER_JETBRAINS" ]; then
+                pr_jb=$(jq -c -n --arg n "$PR_NUMBER_JETBRAINS" '[
+                  {scenario:"jetbrains",image:"",mode:"pr",pr_number:$n}
+                ]')
+                include=$(jq -c -n --argjson a "$include" --argjson b "$pr_jb" '$a + $b')
+              fi
+            elif [ "$RUN_IMAGE_MATRIX" = "true" ]; then
+              include=$(jq -c -n --argjson a "$include" --argjson b "$image" '$a + $b')
+            fi
+          fi
+
+          matrix=$(jq -c -n --argjson inc "$include" '{include: $inc}')
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "Computed matrix: $matrix"
+
+  dw-auto-validate:
+    needs: setup
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install oc CLI
+        uses: redhat-actions/openshift-tools-installer@v3
+        with:
+          oc: latest
+      - name: Checkout Dev Spaces Auto Validation
+        uses: actions/checkout@v6
+        with:
+          repository: 'redhat-developer/devspaces-auto-validation'
+      - name: Mask OpenShift credentials
+        run: |
+          OC_SERVER=$(jq -r --arg k OC_SERVER '.inputs[$k] // empty' "$GITHUB_EVENT_PATH")
+          [ -n "$OC_SERVER" ] && echo "::add-mask::$OC_SERVER"
+          OC_TOKEN=$(jq -r --arg k OC_TOKEN '.inputs[$k] // empty' "$GITHUB_EVENT_PATH")
+          [ -n "$OC_TOKEN" ] && echo "::add-mask::$OC_TOKEN"
+          OC_PROJECT=$(jq -r --arg k OC_PROJECT '.inputs[$k] // empty' "$GITHUB_EVENT_PATH")
+          [ -n "$OC_PROJECT" ] && echo "::add-mask::$OC_PROJECT"
+          exit 0
+      - name: Login to OpenShift
+        uses: redhat-actions/oc-login@v2
+        with:
+          openshift_server_url: ${{ inputs.OC_SERVER || secrets.OC_SERVER }}
+          openshift_token: ${{ inputs.OC_TOKEN || secrets.OC_TOKEN }}
+          namespace: ${{ inputs.OC_PROJECT || secrets.OC_PROJECT }}
+          logout: false
+      - name: Run Dev Spaces Auto Validation
+        run: |
+          if [ "${{ inputs.EDITOR_DEFINITION_SSH }}" != '' ]; then
+            sed -i "s|https://.*\.yaml|${{ inputs.EDITOR_DEFINITION_SSH }}|" settings/settings-sshd.env
+          fi
+          if [ "${{ inputs.EDITOR_DEFINITION_VSCODE }}" != '' ]; then
+            sed -i "s|https://.*\.yaml|${{ inputs.EDITOR_DEFINITION_VSCODE }}|" settings/settings-vscode.env
+          fi
+          if [ "${{ inputs.EDITOR_DEFINITION_JETBRAINS }}" != '' ]; then
+            sed -i "s|https://.*\.yaml|${{ inputs.EDITOR_DEFINITION_JETBRAINS }}|" settings/settings-jetbrains.env
+          fi
+          cp images/images-simple.txt images/images.txt
+          sed -i '/nodejs/!d' devfiles/devfiles.txt
+          EXTRA_ARGS=""
+          if [ "${{ matrix.mode }}" == "image" ]; then
+            EXTRA_ARGS="-i ${{ matrix.image }}"
+          elif [ "${{ matrix.mode }}" == "pr" ]; then
+            EXTRA_ARGS="-p ${{ matrix.pr_number }}"
+          fi
+          ./dw-auto-validate.sh -v -s ${{ matrix.scenario }} ${EXTRA_ARGS}
