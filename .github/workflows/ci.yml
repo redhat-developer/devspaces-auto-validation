@@ -53,6 +53,9 @@ jobs:
           CUSTOM_IMAGE: ${{ inputs.CUSTOM_IMAGE }}
           PR_NUMBER_CHE_CODE: ${{ inputs.PR_NUMBER_CHE_CODE }}
           PR_NUMBER_JETBRAINS: ${{ inputs.PR_NUMBER_JETBRAINS }}
+          EDITOR_DEFINITION_SSH: ${{ inputs.EDITOR_DEFINITION_SSH }}
+          EDITOR_DEFINITION_VSCODE: ${{ inputs.EDITOR_DEFINITION_VSCODE }}
+          EDITOR_DEFINITION_JETBRAINS: ${{ inputs.EDITOR_DEFINITION_JETBRAINS }}
         run: |
           # Mirrors the dw-auto-validate.sh CLI:
           #   no -p/-i  -> main editor definition   (mode: main)
@@ -64,8 +67,27 @@ jobs:
             {"scenario":"jetbrains","image":"","mode":"main"}
           ]'
 
-          # Default (pull_request, or manual with no params): run main for every scenario.
-          include="$main"
+          # Latest Dev Spaces editor images, tested via -i.
+          images='[
+            {"scenario":"vscode","image":"quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-rhel9:latest","mode":"image"},
+            {"scenario":"sshd","image":"quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-sshd-rhel9:latest","mode":"image"},
+            {"scenario":"jetbrains","image":"quay.io/redhat-user-workloads/devspaces-tenant/devspaces/jetbrains-ide-rhel9:latest","mode":"image"}
+          ]'
+
+          # Default (pull_request, or manual with no params): main + latest images for every scenario.
+          include=$(jq -c -n --argjson a "$main" --argjson b "$images" '$a + $b')
+
+          # Append the entries of $1 (a JSON array) for scenario $2 to $include.
+          add() {
+            include=$(jq -c -n --argjson a "$include" --argjson b "$1" --arg s "$2" \
+              '$a + [$b[] | select(.scenario == $s)]')
+          }
+
+          # Append a PR run (-p) for scenario $1 with PR number $2 to $include.
+          add_pr() {
+            include=$(jq -c -n --argjson a "$include" --arg s "$1" --arg n "$2" \
+              '$a + [{scenario:$s,image:"",mode:"pr",pr_number:$n}]')
+          }
 
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             # -i and -p are mutually exclusive (same rule the CLI enforces).
@@ -79,20 +101,21 @@ jobs:
               include=$(jq -c -n --arg s "$SCENARIO" --arg i "$CUSTOM_IMAGE" '[
                 {scenario:$s,image:$i,mode:"image"}
               ]')
-            elif [ -n "$PR_NUMBER_CHE_CODE" ] || [ -n "$PR_NUMBER_JETBRAINS" ]; then
-              # -p <pr>: run only the PR scenarios, not main.
+            elif [ -n "$PR_NUMBER_CHE_CODE$PR_NUMBER_JETBRAINS$EDITOR_DEFINITION_VSCODE$EDITOR_DEFINITION_SSH$EDITOR_DEFINITION_JETBRAINS" ]; then
+              # Only run the scenarios matching the inputs that were set:
+              #   EDITOR_DEFINITION_<x> -> main run for <x>
+              #   PR_NUMBER_<x>         -> PR run + latest image for <x>
               include='[]'
+              [ -n "$EDITOR_DEFINITION_VSCODE" ]    && add "$main" vscode
+              [ -n "$EDITOR_DEFINITION_SSH" ]       && add "$main" sshd
+              [ -n "$EDITOR_DEFINITION_JETBRAINS" ] && add "$main" jetbrains
               if [ -n "$PR_NUMBER_CHE_CODE" ]; then
-                pr_che=$(jq -c -n --arg n "$PR_NUMBER_CHE_CODE" '[
-                  {scenario:"vscode",image:"",mode:"pr",pr_number:$n}
-                ]')
-                include=$(jq -c -n --argjson a "$include" --argjson b "$pr_che" '$a + $b')
+                add_pr vscode "$PR_NUMBER_CHE_CODE"
+                add "$images" vscode
               fi
               if [ -n "$PR_NUMBER_JETBRAINS" ]; then
-                pr_jb=$(jq -c -n --arg n "$PR_NUMBER_JETBRAINS" '[
-                  {scenario:"jetbrains",image:"",mode:"pr",pr_number:$n}
-                ]')
-                include=$(jq -c -n --argjson a "$include" --argjson b "$pr_jb" '$a + $b')
+                add_pr jetbrains "$PR_NUMBER_JETBRAINS"
+                add "$images" jetbrains
               fi
             fi
           fi
@@ -132,6 +155,7 @@ jobs:
           openshift_server_url: ${{ inputs.OC_SERVER || secrets.OC_SERVER }}
           openshift_token: ${{ inputs.OC_TOKEN || secrets.OC_TOKEN }}
           namespace: ${{ inputs.OC_PROJECT || secrets.OC_PROJECT }}
+          logout: false
       - name: Run Dev Spaces Auto Validation
         run: |
           if [ "${{ inputs.EDITOR_DEFINITION_SSH }}" != '' ]; then
