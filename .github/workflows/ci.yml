@@ -21,15 +21,22 @@ on:
       EDITOR_DEFINITION_JETBRAINS:
         description: 'The (optional) editor definition URL for JETBRAINS.'
         type: string
-      RUN_IMAGE_MATRIX:
-        description: 'Run image matrix entries (with custom editor images)'
-        type: boolean
-        default: true
+      SCENARIO:
+        description: 'Scenario for a custom-image run (maps to -s; only used with CUSTOM_IMAGE)'
+        type: choice
+        options:
+          - vscode
+          - sshd
+          - jetbrains
+        default: vscode
+      CUSTOM_IMAGE:
+        description: 'Custom editor image to test (maps to -i). Runs SCENARIO only, not main. Mutually exclusive with the PR_NUMBER_* inputs.'
+        type: string
       PR_NUMBER_CHE_CODE:
-        description: 'che-incubator/che-code PR number (runs vscode + sshd against the PR image)'
+        description: 'che-incubator/che-code PR number (maps to -p; runs vscode against the PR image, not main)'
         type: string
       PR_NUMBER_JETBRAINS:
-        description: 'che-incubator/jetbrains-ide-dev-server PR number (runs jetbrains against the PR image)'
+        description: 'che-incubator/jetbrains-ide-dev-server PR number (maps to -p; runs jetbrains against the PR image, not main)'
         type: string
 
 jobs:
@@ -42,28 +49,42 @@ jobs:
         id: gen
         env:
           EVENT_NAME: ${{ github.event_name }}
-          RUN_IMAGE_MATRIX: ${{ inputs.RUN_IMAGE_MATRIX }}
+          SCENARIO: ${{ inputs.SCENARIO }}
+          CUSTOM_IMAGE: ${{ inputs.CUSTOM_IMAGE }}
           PR_NUMBER_CHE_CODE: ${{ inputs.PR_NUMBER_CHE_CODE }}
           PR_NUMBER_JETBRAINS: ${{ inputs.PR_NUMBER_JETBRAINS }}
         run: |
+          # Mirrors the dw-auto-validate.sh CLI:
+          #   no -p/-i  -> main editor definition   (mode: main)
+          #   -p <pr>   -> PR editor image          (mode: pr)
+          #   -i <img>  -> custom editor image      (mode: image)
           main='[
             {"scenario":"vscode","image":"","mode":"main"},
             {"scenario":"sshd","image":"","mode":"main"},
             {"scenario":"jetbrains","image":"","mode":"main"}
           ]'
-          image='[
-            {"scenario":"vscode","image":"quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-rhel9:latest","mode":"image"},
-            {"scenario":"sshd","image":"quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-sshd-rhel9:latest","mode":"image"},
-            {"scenario":"jetbrains","image":"quay.io/redhat-user-workloads/devspaces-tenant/devspaces/jetbrains-ide-rhel9:latest","mode":"image"}
-          ]'
 
+          # Default (pull_request, or manual with no params): run main for every scenario.
           include="$main"
+
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            if [ -n "$PR_NUMBER_CHE_CODE" ] || [ -n "$PR_NUMBER_JETBRAINS" ]; then
+            # -i and -p are mutually exclusive (same rule the CLI enforces).
+            if [ -n "$CUSTOM_IMAGE" ] && { [ -n "$PR_NUMBER_CHE_CODE" ] || [ -n "$PR_NUMBER_JETBRAINS" ]; }; then
+              echo "::error::CUSTOM_IMAGE (-i) and PR_NUMBER_* (-p) are mutually exclusive." >&2
+              exit 1
+            fi
+
+            if [ -n "$CUSTOM_IMAGE" ]; then
+              # -i <image>: run only the chosen scenario against the custom image.
+              include=$(jq -c -n --arg s "$SCENARIO" --arg i "$CUSTOM_IMAGE" '[
+                {scenario:$s,image:$i,mode:"image"}
+              ]')
+            elif [ -n "$PR_NUMBER_CHE_CODE" ] || [ -n "$PR_NUMBER_JETBRAINS" ]; then
+              # -p <pr>: run only the PR scenarios, not main.
+              include='[]'
               if [ -n "$PR_NUMBER_CHE_CODE" ]; then
                 pr_che=$(jq -c -n --arg n "$PR_NUMBER_CHE_CODE" '[
-                  {scenario:"vscode",image:"",mode:"pr",pr_number:$n},
-                  {scenario:"sshd",image:"",mode:"pr",pr_number:$n}
+                  {scenario:"vscode",image:"",mode:"pr",pr_number:$n}
                 ]')
                 include=$(jq -c -n --argjson a "$include" --argjson b "$pr_che" '$a + $b')
               fi
@@ -73,8 +94,6 @@ jobs:
                 ]')
                 include=$(jq -c -n --argjson a "$include" --argjson b "$pr_jb" '$a + $b')
               fi
-            elif [ "$RUN_IMAGE_MATRIX" = "true" ]; then
-              include=$(jq -c -n --argjson a "$include" --argjson b "$image" '$a + $b')
             fi
           fi
 
@@ -100,11 +119,11 @@ jobs:
           repository: 'redhat-developer/devspaces-auto-validation'
       - name: Mask OpenShift credentials
         run: |
-          OC_SERVER=$(jq -r --arg k OC_SERVER '.inputs[$k] // empty' "$GITHUB_EVENT_PATH")
+          OC_SERVER=$(jq -r '.inputs.OC_SERVER // empty' "$GITHUB_EVENT_PATH")
           [ -n "$OC_SERVER" ] && echo "::add-mask::$OC_SERVER"
-          OC_TOKEN=$(jq -r --arg k OC_TOKEN '.inputs[$k] // empty' "$GITHUB_EVENT_PATH")
+          OC_TOKEN=$(jq -r '.inputs.OC_TOKEN // empty' "$GITHUB_EVENT_PATH")
           [ -n "$OC_TOKEN" ] && echo "::add-mask::$OC_TOKEN"
-          OC_PROJECT=$(jq -r --arg k OC_PROJECT '.inputs[$k] // empty' "$GITHUB_EVENT_PATH")
+          OC_PROJECT=$(jq -r '.inputs.OC_PROJECT // empty' "$GITHUB_EVENT_PATH")
           [ -n "$OC_PROJECT" ] && echo "::add-mask::$OC_PROJECT"
           exit 0
       - name: Login to OpenShift
@@ -113,7 +132,6 @@ jobs:
           openshift_server_url: ${{ inputs.OC_SERVER || secrets.OC_SERVER }}
           openshift_token: ${{ inputs.OC_TOKEN || secrets.OC_TOKEN }}
           namespace: ${{ inputs.OC_PROJECT || secrets.OC_PROJECT }}
-          logout: false
       - name: Run Dev Spaces Auto Validation
         run: |
           if [ "${{ inputs.EDITOR_DEFINITION_SSH }}" != '' ]; then
