@@ -1,0 +1,178 @@
+name: Dev Spaces Auto Validation
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      OC_SERVER:
+        description: 'OpenShift cluster API URL (defaults to secret)'
+        type: string
+      OC_TOKEN:
+        description: 'OpenShift token (defaults to secret)'
+        type: string
+      OC_PROJECT:
+        description: 'OpenShift namespace (defaults to secret)'
+        type: string
+      EDITOR_DEFINITION_SSH:
+        description: 'The (optional) editor definition URL for SSHD.'
+        type: string
+      EDITOR_DEFINITION_VSCODE:
+        description: 'The (optional) editor definition URL for VSCODE.'
+        type: string
+      EDITOR_DEFINITION_JETBRAINS:
+        description: 'The (optional) editor definition URL for JETBRAINS.'
+        type: string
+      SCENARIO:
+        description: 'Scenario for a custom-image run (maps to -s; only used with CUSTOM_IMAGE)'
+        type: choice
+        options:
+          - vscode
+          - sshd
+          - jetbrains
+        default: vscode
+      CUSTOM_IMAGE:
+        description: 'Custom editor image to test (maps to -i). Runs SCENARIO only, not main. Mutually exclusive with the PR_NUMBER_* inputs.'
+        type: string
+      PR_NUMBER_CHE_CODE:
+        description: 'che-incubator/che-code PR number (maps to -p; runs vscode against the PR image, not main)'
+        type: string
+      PR_NUMBER_JETBRAINS:
+        description: 'che-incubator/jetbrains-ide-dev-server PR number (maps to -p; runs jetbrains against the PR image, not main)'
+        type: string
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+    steps:
+      - name: Compute matrix
+        id: gen
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SCENARIO: ${{ inputs.SCENARIO }}
+          CUSTOM_IMAGE: ${{ inputs.CUSTOM_IMAGE }}
+          PR_NUMBER_CHE_CODE: ${{ inputs.PR_NUMBER_CHE_CODE }}
+          PR_NUMBER_JETBRAINS: ${{ inputs.PR_NUMBER_JETBRAINS }}
+          EDITOR_DEFINITION_SSH: ${{ inputs.EDITOR_DEFINITION_SSH }}
+          EDITOR_DEFINITION_VSCODE: ${{ inputs.EDITOR_DEFINITION_VSCODE }}
+          EDITOR_DEFINITION_JETBRAINS: ${{ inputs.EDITOR_DEFINITION_JETBRAINS }}
+        run: |
+          # Mirrors the dw-auto-validate.sh CLI:
+          #   no -p/-i  -> main editor definition   (mode: main)
+          #   -p <pr>   -> PR editor image          (mode: pr)
+          #   -i <img>  -> custom editor image      (mode: image)
+          main='[
+            {"scenario":"vscode","image":"","mode":"main"},
+            {"scenario":"sshd","image":"","mode":"main"},
+            {"scenario":"jetbrains","image":"","mode":"main"}
+          ]'
+
+          # Latest Dev Spaces editor images, tested via -i.
+          images='[
+            {"scenario":"vscode","image":"quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-rhel9:latest","mode":"image"},
+            {"scenario":"sshd","image":"quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-sshd-rhel9:latest","mode":"image"},
+            {"scenario":"jetbrains","image":"quay.io/redhat-user-workloads/devspaces-tenant/devspaces/jetbrains-ide-rhel9:latest","mode":"image"}
+          ]'
+
+          # Default (pull_request, or manual with no params): main + latest images for every scenario.
+          include=$(jq -c -n --argjson a "$main" --argjson b "$images" '$a + $b')
+
+          # Append the entries of $1 (a JSON array) for scenario $2 to $include.
+          add() {
+            include=$(jq -c -n --argjson a "$include" --argjson b "$1" --arg s "$2" \
+              '$a + [$b[] | select(.scenario == $s)]')
+          }
+
+          # Append a PR run (-p) for scenario $1 with PR number $2 to $include.
+          add_pr() {
+            include=$(jq -c -n --argjson a "$include" --arg s "$1" --arg n "$2" \
+              '$a + [{scenario:$s,image:"",mode:"pr",pr_number:$n}]')
+          }
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            # -i and -p are mutually exclusive (same rule the CLI enforces).
+            if [ -n "$CUSTOM_IMAGE" ] && { [ -n "$PR_NUMBER_CHE_CODE" ] || [ -n "$PR_NUMBER_JETBRAINS" ]; }; then
+              echo "::error::CUSTOM_IMAGE (-i) and PR_NUMBER_* (-p) are mutually exclusive." >&2
+              exit 1
+            fi
+
+            if [ -n "$CUSTOM_IMAGE" ]; then
+              # -i <image>: run only the chosen scenario against the custom image.
+              include=$(jq -c -n --arg s "$SCENARIO" --arg i "$CUSTOM_IMAGE" '[
+                {scenario:$s,image:$i,mode:"image"}
+              ]')
+            elif [ -n "$PR_NUMBER_CHE_CODE$PR_NUMBER_JETBRAINS$EDITOR_DEFINITION_VSCODE$EDITOR_DEFINITION_SSH$EDITOR_DEFINITION_JETBRAINS" ]; then
+              # Only run the scenarios matching the inputs that were set:
+              #   EDITOR_DEFINITION_<x> -> main run for <x>
+              #   PR_NUMBER_<x>         -> PR run + latest image for <x>
+              include='[]'
+              [ -n "$EDITOR_DEFINITION_VSCODE" ]    && add "$main" vscode
+              [ -n "$EDITOR_DEFINITION_SSH" ]       && add "$main" sshd
+              [ -n "$EDITOR_DEFINITION_JETBRAINS" ] && add "$main" jetbrains
+              if [ -n "$PR_NUMBER_CHE_CODE" ]; then
+                add_pr vscode "$PR_NUMBER_CHE_CODE"
+                add "$images" vscode
+              fi
+              if [ -n "$PR_NUMBER_JETBRAINS" ]; then
+                add_pr jetbrains "$PR_NUMBER_JETBRAINS"
+                add "$images" jetbrains
+              fi
+            fi
+          fi
+
+          matrix=$(jq -c -n --argjson inc "$include" '{include: $inc}')
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "Computed matrix: $matrix"
+
+  dw-auto-validate:
+    needs: setup
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install oc CLI
+        uses: redhat-actions/openshift-tools-installer@v3
+        with:
+          oc: latest
+      - name: Checkout Dev Spaces Auto Validation
+        uses: actions/checkout@v6
+        with:
+          repository: 'redhat-developer/devspaces-auto-validation'
+      - name: Mask OpenShift credentials
+        run: |
+          OC_SERVER=$(jq -r '.inputs.OC_SERVER // empty' "$GITHUB_EVENT_PATH")
+          [ -n "$OC_SERVER" ] && echo "::add-mask::$OC_SERVER"
+          OC_TOKEN=$(jq -r '.inputs.OC_TOKEN // empty' "$GITHUB_EVENT_PATH")
+          [ -n "$OC_TOKEN" ] && echo "::add-mask::$OC_TOKEN"
+          OC_PROJECT=$(jq -r '.inputs.OC_PROJECT // empty' "$GITHUB_EVENT_PATH")
+          [ -n "$OC_PROJECT" ] && echo "::add-mask::$OC_PROJECT"
+          exit 0
+      - name: Login to OpenShift
+        uses: redhat-actions/oc-login@v2
+        with:
+          openshift_server_url: ${{ inputs.OC_SERVER || secrets.OC_SERVER }}
+          openshift_token: ${{ inputs.OC_TOKEN || secrets.OC_TOKEN }}
+          namespace: ${{ inputs.OC_PROJECT || secrets.OC_PROJECT }}
+          logout: false
+      - name: Run Dev Spaces Auto Validation
+        run: |
+          if [ "${{ inputs.EDITOR_DEFINITION_SSH }}" != '' ]; then
+            sed -i "s|https://.*\.yaml|${{ inputs.EDITOR_DEFINITION_SSH }}|" settings/settings-sshd.env
+          fi
+          if [ "${{ inputs.EDITOR_DEFINITION_VSCODE }}" != '' ]; then
+            sed -i "s|https://.*\.yaml|${{ inputs.EDITOR_DEFINITION_VSCODE }}|" settings/settings-vscode.env
+          fi
+          if [ "${{ inputs.EDITOR_DEFINITION_JETBRAINS }}" != '' ]; then
+            sed -i "s|https://.*\.yaml|${{ inputs.EDITOR_DEFINITION_JETBRAINS }}|" settings/settings-jetbrains.env
+          fi
+          cp images/images-simple.txt images/images.txt
+          sed -i '/nodejs/!d' devfiles/devfiles.txt
+          EXTRA_ARGS=""
+          if [ "${{ matrix.mode }}" == "image" ]; then
+            EXTRA_ARGS="-i ${{ matrix.image }}"
+          elif [ "${{ matrix.mode }}" == "pr" ]; then
+            EXTRA_ARGS="-p ${{ matrix.pr_number }}"
+          fi
+          ./dw-auto-validate.sh -v -s ${{ matrix.scenario }} ${EXTRA_ARGS}

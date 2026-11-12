@@ -17,6 +17,9 @@ registry.access.redhat.com/ubi8:latest
 registry.access.redhat.com/ubi8-minimal:latest
 registry.access.redhat.com/ubi8-micro:latest
 
+registry.access.redhat.com/ubi9:latest
+registry.access.redhat.com/ubi9-minimal:latest
+
 registry.access.redhat.com/ubi9:9.6
 registry.access.redhat.com/ubi9-minimal:9.6
 registry.access.redhat.com/ubi9-micro:9.6
@@ -28,6 +31,9 @@ registry.access.redhat.com/ubi9-micro:9.7
 registry.access.redhat.com/ubi9:9.8
 registry.access.redhat.com/ubi9-minimal:9.8
 registry.access.redhat.com/ubi9-micro:9.8
+
+registry.access.redhat.com/ubi10:latest
+registry.access.redhat.com/ubi10-minimal:latest
 
 registry.access.redhat.com/ubi10:10.0
 registry.access.redhat.com/ubi10/ubi-minimal:10.0
