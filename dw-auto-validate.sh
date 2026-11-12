@@ -234,41 +234,30 @@ else
   log -f "${GREEN}Ok!${NC}"
 fi
 
-if [ -n "${CUSTOM_IMAGE}" ]; then
-  if [ -x "$(command -v skopeo)" ]; then
-    log -f "\n${BLUE}Checking custom image...${NC}"
-    log "Executing 'skopeo inspect'..."
-    run_cmd skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${CUSTOM_IMAGE}"
-    if [ $? -ne 0 ]; then
-      log -f "${YELLOW}Warning:${NC} Could not verify custom image '${CUSTOM_IMAGE}'. Proceeding anyway."
-    else
-      log -f "${GREEN}Ok!${NC}"
-    fi
+# skopeo must be installed when using an override image (-p or -i)
+if [ -n "${PR_NUMBER}" ] || [ -n "${CUSTOM_IMAGE}" ]; then
+  log -f "\n${BLUE}Checking skopeo installation...${NC}"
+  log "Executing 'which skopeo'..."
+  if ! [ -x "$(command -v skopeo)" ]; then
+    log -f "${RED}Error:${NC} skopeo is not installed. Please install skopeo package." >&2
+    exit 1
+  else
+    log -f "${GREEN}Ok!${NC}"
   fi
 fi
 
 OVERRIDE_IMAGE=""
 if [ -n "${CUSTOM_IMAGE}" ]; then
-  OVERRIDE_IMAGE="${CUSTOM_IMAGE}"
-fi
-
-# You must be logged into your OpenShift Cluster
-log -f "\n${BLUE}Checking cluster connection...${NC}"
-log "Executing 'oc whoami'..."
-current_cluster=$(oc config current-context)
-run_cmd oc whoami --insecure-skip-tls-verify
-if [ $? -eq 1 ]; then
-  log -f "${YELLOW}Not connected.${NC} Do you want to login to current cluster? Current cluster is ${PURPLE}${current_cluster}.${NC}"
-  while true; do
-    read -rp "(y/n)? : " yn
-    case $yn in
-      [Yy]* ) oc login --web; break;;
-      [Nn]* ) exit;;
-      * ) echo "Please answer (Yy)es or (Nn)o.";;
-    esac
-  done
-else
-  log -f "${GREEN}Ok!${NC}\nUsing current context ${PURPLE}${current_cluster}${NC}"
+  log -f "\n${BLUE}Checking custom image...${NC}"
+  log "Executing 'skopeo inspect'..."
+  run_cmd skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${CUSTOM_IMAGE}"
+  if [ $? -ne 0 ]; then
+    log -f "${RED}Error:${NC} Could not verify custom image '${CUSTOM_IMAGE}'. Verify URL." >&2
+    exit 1
+  else
+    log -f "${GREEN}Ok!${NC}"
+    OVERRIDE_IMAGE="${CUSTOM_IMAGE}"
+  fi
 fi
 
 # Choose scenario
@@ -305,6 +294,25 @@ if [ -n "${PR_NUMBER}" ]; then
   fi
   log -f "${GREEN}Ok!${NC}"
   OVERRIDE_IMAGE="${PR_IMAGE}"
+fi
+
+# You must be logged into your OpenShift Cluster
+log -f "\n${BLUE}Checking cluster connection...${NC}"
+log "Executing 'oc whoami'..."
+current_cluster=$(oc config current-context)
+run_cmd oc whoami --insecure-skip-tls-verify
+if [ $? -eq 1 ]; then
+  log -f "${YELLOW}Not connected.${NC} Do you want to login to current cluster? Current cluster is ${PURPLE}${current_cluster}.${NC}"
+  while true; do
+    read -rp "(y/n)? : " yn
+    case $yn in
+      [Yy]* ) oc login --web; break;;
+      [Nn]* ) exit;;
+      * ) echo "Please answer (Yy)es or (Nn)o.";;
+    esac
+  done
+else
+  log -f "${GREEN}Ok!${NC}\nUsing current context ${PURPLE}${current_cluster}${NC}"
 fi
 
 # user namespace where testing will occur
