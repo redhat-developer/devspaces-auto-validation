@@ -443,97 +443,151 @@ PROJEOF
     TEST_LABEL="TEST [${total_count}/${total_tests}]"
     log "\n${BLUE}Begin test of ${devfile_url} with ${image}${NC}"
     start_spin "Initializing..."
-    # Modify DevWorkspace template
-    # Goal is to apply a devworkspace resource to the cluster,
-    # with a replacement of the below placeholder in the template:
-    # DEVWORKSPACE_NAME -> the devworksapce name in the setting
-    # DEVWORKSPACE_NS -> the devworkspace namespace from current context
-    # DEVFILE -> one of the devfile url in a list
-    # PROJECT_URL -> one the project sample url in a list
-    # EDITOR_DEFINITION -> the editor definition url
-    # When using PR mode, replace uri with kubernetes reference; otherwise use uri
-    if [ -n "${OVERRIDE_IMAGE}" ]; then
-      EDITOR_SED_EXPR="s|uri: EDITOR_DEFINITION|kubernetes:\\
-             name: ${EDITOR_DWT_NAME}|"
+
+    # Retry configuration: MAX_RETRIES can be set via environment variable
+    # Default is 2 retries to handle intermittent failures
+    MAX_RETRIES=${MAX_RETRIES:-2}
+
+    # Don't retry excluded images since their failure is expected
+    if shouldExclude "${image}"; then
+      actual_max_retries=0
     else
-      EDITOR_SED_EXPR="s|EDITOR_DEFINITION|${EDITOR_DEFINITION}|"
+      actual_max_retries=${MAX_RETRIES}
     fi
-    cat devworkspace-template.yaml | \
-    sed \
-    -e "/DEVFILE/r ${TMP_DEVFILE}" \
-    -e '/DEVFILE/ d' \
-    -e "/PROJECTS/r ${TMP_PROJECTS}" \
-    -e '/PROJECTS/ d' \
-    -e "s|DEVWORKSPACE_NAME|${DEVWORKSPACE_NAME}|" \
-    -e "s|DEVWORKSPACE_NS|${DEVWORKSPACE_NS}|" \
-    -e "${EDITOR_SED_EXPR}" \
-    -e "s|PROJECT_URL|${PROJECT_URL}|" | \
-    # Modify the result (must be separate)
-    # here is the replacement of the container image used in the devfile from an image in the list
-    eval "sed \"s|image: .*|image: ${image}|\" > ${TMP_DEVWORKSPACE}"
-    apply_output=$(oc apply -f "${TMP_DEVWORKSPACE}" 2>&1)
-    [ ${VERBOSE} -eq 1 ] && echo -e "${apply_output}"
-    echo -e "${apply_output}" | sed "${STRIP_ANSI}" >> "${LOG_FILE}"
-    # Fail fast: if the cluster session has expired, every remaining test will
-    # fail the same way. Abort the whole suite instead of grinding through them.
-    if is_auth_lost "${apply_output}"; then
-      stop_spin
-      log -f "\n${RED}Error:${NC} Lost cluster session (Unauthorized / token expired). Aborting remaining tests. ⛔"
-      AUTH_LOST=1
-      break
-    fi
-    state=""
-    log -n "Waiting for ${DEVWORKSPACE_NAME} to run ."
-    count=0
-    while [ "${state}" != "Running" ] && [ "${state}" != "Failed" ] && [ ${count} -lt ${TIMEOUT} ]; do
-      state=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.phase}')
-      start_spin "Waiting for [Running] pod state... [Currently: ${state:-Pending}]"
-      sleep 1s
-      log -n "."
-      count=$((count+1))
-    done
-    stop_spin
-    if [ "${state}" == "Running" ]; then
-      log "\n${GREEN}${DEVWORKSPACE_NAME} is Running${NC}"
-    else
-      if [ "${state}" == "Failed" ]; then
-        dw_message=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.message}' 2>/dev/null)
-        log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start (state: Failed after ${count}s)${NC}"
-        log "${RED}Reason: ${dw_message}${NC}"
-      else
-        log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start (timed out after ${TIMEOUT}s, last state: ${state})${NC}"
+
+    retry_attempt=0
+    test_passed=0
+
+    # Retry loop: attempt test up to actual_max_retries + 1 times (initial attempt + retries)
+    while [ ${retry_attempt} -le ${actual_max_retries} ] && [ ${test_passed} -eq 0 ]; do
+      if [ ${retry_attempt} -gt 0 ]; then
+        log "\n${YELLOW}Retry attempt ${retry_attempt}/${actual_max_retries} for ${devfile_url} with ${image}${NC}"
+        start_spin "Retrying..."
       fi
-      cleanup_test
-      stop_spin
-      if shouldExclude "${image}"; then
-        echo "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌ (EXCLUDED ↩️ )"
-        excluded_test+=("Devfile '$devfile_url' using image '$image'")
+
+      # Modify DevWorkspace template
+      # Goal is to apply a devworkspace resource to the cluster,
+      # with a replacement of the below placeholder in the template:
+      # DEVWORKSPACE_NAME -> the devworksapce name in the setting
+      # DEVWORKSPACE_NS -> the devworkspace namespace from current context
+      # DEVFILE -> one of the devfile url in a list
+      # PROJECT_URL -> one the project sample url in a list
+      # EDITOR_DEFINITION -> the editor definition url
+      # When using PR mode, replace uri with kubernetes reference; otherwise use uri
+      if [ -n "${OVERRIDE_IMAGE}" ]; then
+        EDITOR_SED_EXPR="s|uri: EDITOR_DEFINITION|kubernetes:\\
+               name: ${EDITOR_DWT_NAME}|"
       else
-        log -f "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌"
-        failed_test+=("Devfile '$devfile_url' using image '$image'")
+        EDITOR_SED_EXPR="s|EDITOR_DEFINITION|${EDITOR_DEFINITION}|"
       fi
-      continue
-    fi
-    log "Validating ${DEVWORKSPACE_NAME} .."
-    start_spin "Validating..."
-    validate_devworkspace
-    validate_rc=$?
-    if [ ${validate_rc} -eq 0 ]; then
-      cleanup_test
+      cat devworkspace-template.yaml | \
+      sed \
+      -e "/DEVFILE/r ${TMP_DEVFILE}" \
+      -e '/DEVFILE/ d' \
+      -e "/PROJECTS/r ${TMP_PROJECTS}" \
+      -e '/PROJECTS/ d' \
+      -e "s|DEVWORKSPACE_NAME|${DEVWORKSPACE_NAME}|" \
+      -e "s|DEVWORKSPACE_NS|${DEVWORKSPACE_NS}|" \
+      -e "${EDITOR_SED_EXPR}" \
+      -e "s|PROJECT_URL|${PROJECT_URL}|" | \
+      # Modify the result (must be separate)
+      # here is the replacement of the container image used in the devfile from an image in the list
+      eval "sed \"s|image: .*|image: ${image}|\" > ${TMP_DEVWORKSPACE}"
+      apply_output=$(oc apply -f "${TMP_DEVWORKSPACE}" 2>&1)
+      [ ${VERBOSE} -eq 1 ] && echo -e "${apply_output}"
+      echo -e "${apply_output}" | sed "${STRIP_ANSI}" >> "${LOG_FILE}"
+      # Fail fast: if the cluster session has expired, every remaining test will
+      # fail the same way. Abort the whole suite instead of grinding through them.
+      if is_auth_lost "${apply_output}"; then
+        stop_spin
+        log -f "\n${RED}Error:${NC} Lost cluster session (Unauthorized / token expired). Aborting remaining tests. ⛔"
+        AUTH_LOST=1
+        break 2  # break out of both retry and image loops
+      fi
+      state=""
+      log -n "Waiting for ${DEVWORKSPACE_NAME} to run ."
+      count=0
+      while [ "${state}" != "Running" ] && [ "${state}" != "Failed" ] && [ ${count} -lt ${TIMEOUT} ]; do
+        state=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.phase}')
+        start_spin "Waiting for [Running] pod state... [Currently: ${state:-Pending}]"
+        sleep 1s
+        log -n "."
+        count=$((count+1))
+      done
       stop_spin
-      log -f "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} PASSED ✅"
-      ((success_count++))
-    else
-      cleanup_test
-      stop_spin
-      if shouldExclude "${image}"; then
-        log -f "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌ (EXCLUDED ↩️ )"
-        excluded_test+=("Devfile '$devfile_url' using image '$image'")
+
+      # Check if workspace started successfully
+      if [ "${state}" == "Running" ]; then
+        log "\n${GREEN}${DEVWORKSPACE_NAME} is Running${NC}"
+
+        # Validate the workspace
+        log "Validating ${DEVWORKSPACE_NAME} .."
+        start_spin "Validating..."
+        validate_devworkspace
+        validate_rc=$?
+
+        if [ ${validate_rc} -eq 0 ]; then
+          # Validation passed
+          test_passed=1
+          cleanup_test
+          stop_spin
+          if [ ${retry_attempt} -gt 0 ]; then
+            log -f "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} PASSED ✅ (after ${retry_attempt} retries)"
+          else
+            log -f "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} PASSED ✅"
+          fi
+          ((success_count++))
+        else
+          # Validation failed
+          stop_spin
+          if [ ${retry_attempt} -lt ${actual_max_retries} ]; then
+            log "\n${YELLOW}Validation failed, will retry...${NC}"
+            cleanup_test
+          else
+            # Last attempt failed
+            cleanup_test
+            if shouldExclude "${image}"; then
+              log -f "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌ (EXCLUDED ↩️ ) after $((retry_attempt + 1)) attempts"
+              excluded_test+=("Devfile '$devfile_url' using image '$image'")
+            else
+              log -f "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌ after $((retry_attempt + 1)) attempts"
+              failed_test+=("Devfile '$devfile_url' using image '$image'")
+            fi
+          fi
+        fi
       else
-        log -f "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌"
-        failed_test+=("Devfile '$devfile_url' using image '$image'")
+        # Workspace failed to start
+        if [ "${state}" == "Failed" ]; then
+          dw_message=$(oc get dw ${DEVWORKSPACE_NAME} -o 'jsonpath={.status.message}' 2>/dev/null)
+          log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start (state: Failed after ${count}s)${NC}"
+          log "${RED}Reason: ${dw_message}${NC}"
+        else
+          log "\n${YELLOW}${DEVWORKSPACE_NAME} failed to start (timed out after ${TIMEOUT}s, last state: ${state})${NC}"
+        fi
+
+        if [ ${retry_attempt} -lt ${actual_max_retries} ]; then
+          log "\n${YELLOW}Workspace failed to start, will retry...${NC}"
+          cleanup_test
+        else
+          # Last attempt failed
+          cleanup_test
+          stop_spin
+          if shouldExclude "${image}"; then
+            log -f "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌ (EXCLUDED ↩️ ) after $((retry_attempt + 1)) attempts"
+            excluded_test+=("Devfile '$devfile_url' using image '$image'")
+          else
+            log -f "TEST [${total_count}/${total_tests}] ${devfile_url} with ${image} FAILED ❌ after $((retry_attempt + 1)) attempts"
+            failed_test+=("Devfile '$devfile_url' using image '$image'")
+          fi
+        fi
       fi
-    fi
+
+      ((retry_attempt++))
+    done # retry loop
+
+    # If auth was lost, break out of image loop
+    [[ ${AUTH_LOST} -eq 1 ]] && break
+
     sleep 1s
   done # image loop
   [[ ${AUTH_LOST} -eq 1 ]] && break
