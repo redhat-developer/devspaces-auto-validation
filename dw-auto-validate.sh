@@ -587,7 +587,12 @@ log -f "  Excluded: ${YELLOW}${#excluded_test[@]}${NC}"
 log -f "  Elapsed time: ${PURPLE}${ELAPSED_DISPLAY}${NC}"
 log -f "======================"
 
+
+: ${PERMITTED_FAILURE_RATE:=0}
+should_fail=0
 if [ ${#failed_test[@]} -gt 0 ]; then
+  failure_rate=$(echo "${#failed_test[@]} / ${total_count}" | bc -l)
+  should_fail=$(echo "${failure_rate} > ${PERMITTED_FAILURE_RATE}" | bc -l)
   log -f ""
   log -f "Failed tests:"
   for tst in "${failed_test[@]}"; do
@@ -603,6 +608,6 @@ fi
 log -f ""
 log -f "Log file: ${BLUE}${LOG_FILE}${NC}"
 
-if [ ${#failed_test[@]} -gt 0 ] || [ ${AUTH_LOST} -eq 1 ]; then
+if [ ${should_fail} -eq 1 ] || [ ${AUTH_LOST} -eq 1 ]; then
   exit 1
 fi

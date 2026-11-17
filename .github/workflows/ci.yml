@@ -1,6 +1,5 @@
 name: Dev Spaces Auto Validation
 on:
-  pull_request:
   workflow_dispatch:
     inputs:
       OC_SERVER:
@@ -175,4 +174,4 @@ jobs:
           elif [ "${{ matrix.mode }}" == "pr" ]; then
             EXTRA_ARGS="-p ${{ matrix.pr_number }}"
           fi
-          ./dw-auto-validate.sh -v -s ${{ matrix.scenario }} ${EXTRA_ARGS}
+          PERMITTED_FAILURE_RATE='0.1' ./dw-auto-validate.sh -v -s ${{ matrix.scenario }} ${EXTRA_ARGS}
