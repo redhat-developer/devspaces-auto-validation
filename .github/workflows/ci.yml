@@ -104,19 +104,13 @@ jobs:
             elif [ -n "$PR_NUMBER_CHE_CODE$PR_NUMBER_JETBRAINS$EDITOR_DEFINITION_VSCODE$EDITOR_DEFINITION_SSH$EDITOR_DEFINITION_JETBRAINS" ]; then
               # Only run the scenarios matching the inputs that were set:
               #   EDITOR_DEFINITION_<x> -> main run for <x>
-              #   PR_NUMBER_<x>         -> PR run + latest image for <x>
+              #   PR_NUMBER_<x>         -> PR run for <x>
               include='[]'
               [ -n "$EDITOR_DEFINITION_VSCODE" ]    && add "$main" vscode
               [ -n "$EDITOR_DEFINITION_SSH" ]       && add "$main" sshd
               [ -n "$EDITOR_DEFINITION_JETBRAINS" ] && add "$main" jetbrains
-              if [ -n "$PR_NUMBER_CHE_CODE" ]; then
-                add_pr vscode "$PR_NUMBER_CHE_CODE"
-                add "$images" vscode
-              fi
-              if [ -n "$PR_NUMBER_JETBRAINS" ]; then
-                add_pr jetbrains "$PR_NUMBER_JETBRAINS"
-                add "$images" jetbrains
-              fi
+              [ -n "$PR_NUMBER_CHE_CODE" ]  && add_pr vscode "$PR_NUMBER_CHE_CODE"
+              [ -n "$PR_NUMBER_JETBRAINS" ] && add_pr jetbrains "$PR_NUMBER_JETBRAINS"
             fi
           fi
 
