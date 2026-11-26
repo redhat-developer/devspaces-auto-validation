@@ -122,9 +122,10 @@ while getopts "vfdhs:p:i:" o; do
     echo -e "  -d\t\t\tDebug mode (verbose + keep resources, single test only)"
     echo -e "  -f\t\t\tFull test matrix (all images)"
     echo -e "  -s <scenario>\t\tSkip scenario prompt (sshd|jetbrains|vscode)"
-    echo -e "  -p <PR_NUMBER>\tTest a che-code PR image (from che-incubator/che-code)"
-    echo -e "  -i <IMAGE>\t\tTest a custom editor image"
+    echo -e "  -p <PR_NUMBER>\tTest an editor PR image (requires -s vscode|jetbrains)"
+    echo -e "  -i <IMAGE>\t\tTest a custom editor image (requires -s)"
     echo -e "  -h\t\t\tShow this help message"
+    echo -e "\n-p and -i are mutually exclusive."
     exit 0
     ;;
     \?)
@@ -133,9 +134,25 @@ while getopts "vfdhs:p:i:" o; do
   esac
 done
 
+# Validate option combinations
+#   -s <scenario>                  -> main editor definition
+#   -s <vscode|jetbrains> -p <pr>  -> PR editor image
+#   -s <scenario> -i <image>       -> custom editor image
 # -p and -i are mutually exclusive
 if [ -n "${PR_NUMBER}" ] && [ -n "${CUSTOM_IMAGE}" ]; then
   log -f "${RED}Error:${NC} -p and -i options are mutually exclusive." >&2
+  exit 1
+fi
+
+# -s is required with -p or -i, so the override image matches the intended scenario
+if { [ -n "${PR_NUMBER}" ] || [ -n "${CUSTOM_IMAGE}" ]; } && [ -z "${SCENARIO}" ]; then
+  log -f "${RED}Error:${NC} -s <scenario> is required when using -p or -i." >&2
+  exit 1
+fi
+
+# PR images only exist for vscode (che-code) and jetbrains (jetbrains-ide-dev-server)
+if [ -n "${PR_NUMBER}" ] && [ "${SCENARIO}" == "sshd" ]; then
+  log -f "${RED}Error:${NC} -p is only supported with the 'vscode' or 'jetbrains' scenarios." >&2
   exit 1
 fi
 
@@ -234,41 +251,30 @@ else
   log -f "${GREEN}Ok!${NC}"
 fi
 
-if [ -n "${CUSTOM_IMAGE}" ]; then
-  if [ -x "$(command -v skopeo)" ]; then
-    log -f "\n${BLUE}Checking custom image...${NC}"
-    log "Executing 'skopeo inspect'..."
-    run_cmd skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${CUSTOM_IMAGE}"
-    if [ $? -ne 0 ]; then
-      log -f "${YELLOW}Warning:${NC} Could not verify custom image '${CUSTOM_IMAGE}'. Proceeding anyway."
-    else
-      log -f "${GREEN}Ok!${NC}"
-    fi
+# skopeo must be installed when using an override image (-p or -i)
+if [ -n "${PR_NUMBER}" ] || [ -n "${CUSTOM_IMAGE}" ]; then
+  log -f "\n${BLUE}Checking skopeo installation...${NC}"
+  log "Executing 'which skopeo'..."
+  if ! [ -x "$(command -v skopeo)" ]; then
+    log -f "${RED}Error:${NC} skopeo is not installed. Please install skopeo package." >&2
+    exit 1
+  else
+    log -f "${GREEN}Ok!${NC}"
   fi
 fi
 
 OVERRIDE_IMAGE=""
 if [ -n "${CUSTOM_IMAGE}" ]; then
-  OVERRIDE_IMAGE="${CUSTOM_IMAGE}"
-fi
-
-# You must be logged into your OpenShift Cluster
-log -f "\n${BLUE}Checking cluster connection...${NC}"
-log "Executing 'oc whoami'..."
-current_cluster=$(oc config current-context)
-run_cmd oc whoami --insecure-skip-tls-verify
-if [ $? -eq 1 ]; then
-  log -f "${YELLOW}Not connected.${NC} Do you want to login to current cluster? Current cluster is ${PURPLE}${current_cluster}.${NC}"
-  while true; do
-    read -rp "(y/n)? : " yn
-    case $yn in
-      [Yy]* ) oc login --web; break;;
-      [Nn]* ) exit;;
-      * ) echo "Please answer (Yy)es or (Nn)o.";;
-    esac
-  done
-else
-  log -f "${GREEN}Ok!${NC}\nUsing current context ${PURPLE}${current_cluster}${NC}"
+  log -f "\n${BLUE}Checking custom image...${NC}"
+  log "Executing 'skopeo inspect'..."
+  run_cmd skopeo inspect --no-tags --retry-times 2 --override-arch amd64 --override-os linux "docker://${CUSTOM_IMAGE}"
+  if [ $? -ne 0 ]; then
+    log -f "${RED}Error:${NC} Could not verify custom image '${CUSTOM_IMAGE}'. Verify URL." >&2
+    exit 1
+  else
+    log -f "${GREEN}Ok!${NC}"
+    OVERRIDE_IMAGE="${CUSTOM_IMAGE}"
+  fi
 fi
 
 # Choose scenario
@@ -305,6 +311,25 @@ if [ -n "${PR_NUMBER}" ]; then
   fi
   log -f "${GREEN}Ok!${NC}"
   OVERRIDE_IMAGE="${PR_IMAGE}"
+fi
+
+# You must be logged into your OpenShift Cluster
+log -f "\n${BLUE}Checking cluster connection...${NC}"
+log "Executing 'oc whoami'..."
+current_cluster=$(oc config current-context)
+run_cmd oc whoami --insecure-skip-tls-verify
+if [ $? -eq 1 ]; then
+  log -f "${YELLOW}Not connected.${NC} Do you want to login to current cluster? Current cluster is ${PURPLE}${current_cluster}.${NC}"
+  while true; do
+    read -rp "(y/n)? : " yn
+    case $yn in
+      [Yy]* ) oc login --web; break;;
+      [Nn]* ) exit;;
+      * ) echo "Please answer (Yy)es or (Nn)o.";;
+    esac
+  done
+else
+  log -f "${GREEN}Ok!${NC}\nUsing current context ${PURPLE}${current_cluster}${NC}"
 fi
 
 # user namespace where testing will occur
