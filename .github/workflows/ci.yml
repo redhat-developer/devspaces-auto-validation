@@ -1,6 +1,5 @@
 name: Dev Spaces Auto Validation
 on:
-  pull_request:
   workflow_dispatch:
     inputs:
       OC_SERVER:
