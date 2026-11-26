@@ -122,9 +122,10 @@ while getopts "vfdhs:p:i:" o; do
     echo -e "  -d\t\t\tDebug mode (verbose + keep resources, single test only)"
     echo -e "  -f\t\t\tFull test matrix (all images)"
     echo -e "  -s <scenario>\t\tSkip scenario prompt (sshd|jetbrains|vscode)"
-    echo -e "  -p <PR_NUMBER>\tTest a che-code PR image (from che-incubator/che-code)"
-    echo -e "  -i <IMAGE>\t\tTest a custom editor image"
+    echo -e "  -p <PR_NUMBER>\tTest an editor PR image (requires -s vscode|jetbrains)"
+    echo -e "  -i <IMAGE>\t\tTest a custom editor image (requires -s)"
     echo -e "  -h\t\t\tShow this help message"
+    echo -e "\n-p and -i are mutually exclusive."
     exit 0
     ;;
     \?)
@@ -133,9 +134,25 @@ while getopts "vfdhs:p:i:" o; do
   esac
 done
 
+# Validate option combinations
+#   -s <scenario>                  -> main editor definition
+#   -s <vscode|jetbrains> -p <pr>  -> PR editor image
+#   -s <scenario> -i <image>       -> custom editor image
 # -p and -i are mutually exclusive
 if [ -n "${PR_NUMBER}" ] && [ -n "${CUSTOM_IMAGE}" ]; then
   log -f "${RED}Error:${NC} -p and -i options are mutually exclusive." >&2
+  exit 1
+fi
+
+# -s is required with -p or -i, so the override image matches the intended scenario
+if { [ -n "${PR_NUMBER}" ] || [ -n "${CUSTOM_IMAGE}" ]; } && [ -z "${SCENARIO}" ]; then
+  log -f "${RED}Error:${NC} -s <scenario> is required when using -p or -i." >&2
+  exit 1
+fi
+
+# PR images only exist for vscode (che-code) and jetbrains (jetbrains-ide-dev-server)
+if [ -n "${PR_NUMBER}" ] && [ "${SCENARIO}" == "sshd" ]; then
+  log -f "${RED}Error:${NC} -p is only supported with the 'vscode' or 'jetbrains' scenarios." >&2
   exit 1
 fi
 

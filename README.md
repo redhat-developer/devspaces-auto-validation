@@ -22,11 +22,11 @@ Automated validation tool for testing DevWorkspace instances on OpenShift cluste
 # Skip interactive scenario choice (valid values: sshd, jetbrains, vscode)
 ./dw-auto-validate.sh -s vscode
 
-# Test a che-code PR image (from che-incubator/che-code)
-./dw-auto-validate.sh -p 1234
+# Test an editor PR image (-s is required: vscode for che-code, jetbrains for jetbrains-ide-dev-server)
+./dw-auto-validate.sh -s vscode -p 1234
 
-# Test a custom editor image
-./dw-auto-validate.sh -i quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-rhel9:3.29
+# Test a custom editor image (-s is required)
+./dw-auto-validate.sh -s vscode -i quay.io/redhat-user-workloads/devspaces-tenant/devspaces/code-rhel9:3.29
 
 # Help
 ./dw-auto-validate.sh -h
@@ -51,14 +51,29 @@ Automated validation tool for testing DevWorkspace instances on OpenShift cluste
 ### Main Script Flow (dw-auto-validate.sh)
 
 1. **Prerequisites Check**: Validates `oc`, `jq` (and `skopeo` when using `-p` or `-i`) installation, failing if any is missing. Inspects the override image (`-p` PR image or `-i` custom image) with `skopeo`, failing if it cannot be found. Checks cluster login (prompts for web login if needed)
-2. **Scenario Selection**: Interactive prompt to choose scenario (1=sshd, 2=jetbrains, 3=vscode)
+2. **Scenario Selection**: Interactive prompt to choose scenario (1=sshd, 2=jetbrains, 3=vscode), skipped when `-s` is given (mandatory with `-p`/`-i`)
 3. **Settings Loading**: Sources `settings/settings-<SCENARIO>.env` to load configuration and validation function
 4. **Test Execution**:
    - Starts timer
    - Iterates through devfiles × images matrix
    - For each combination: creates DevWorkspace, waits for Running state, validates, records results
+   - Failed combinations are retried (see [Retries](#retries))
+   - If the cluster session is lost (`Unauthorized` / token expired), the remaining tests are aborted
 5. **Cleanup**: Deletes DevWorkspace and temporary files (skipped in debug mode)
-6. **Summary Report**: Shows test counts, success/failure/excluded, elapsed time, and lists failed tests. The script exits with code `1` if any non-excluded test failed, `0` otherwise
+6. **Summary Report**: Shows test counts, success/failure/excluded, elapsed time, and lists failed tests. The script exits with code `1` if any non-excluded test failed or the run was aborted because the cluster session was lost, `0` otherwise
+
+### Retries
+
+Each devfile × image combination is retried when the DevWorkspace fails to start (`Failed` state or timeout) or when `validate_devworkspace()` fails, so intermittent failures don't fail the whole run.
+
+- `MAX_RETRIES` environment variable sets the number of retries (default `2`, i.e. up to 3 attempts). Example: `MAX_RETRIES=0 ./dw-auto-validate.sh -s vscode` disables retries
+- Images matching `EXCLUDED_IMAGE_PATTERNS` are never retried, since they're expected to fail
+- `cleanup_test()` runs between attempts so each retry starts from a stopped/deleted DevWorkspace
+- A test passing on retry is reported as `PASSED ✅ (after N retries)`; a test failing on every attempt is reported as `FAILED ❌ after N attempts`
+
+### Session Loss Detection
+
+If `oc apply` output reports `Unauthorized` or `must be logged in to the server` (see `is_auth_lost()`), the script stops immediately instead of retrying or failing every remaining test, prints `Run aborted early` in the summary, and exits with code `1`.
 
 ### Command-Line Flags
 
@@ -66,8 +81,9 @@ Automated validation tool for testing DevWorkspace instances on OpenShift cluste
 - `-f`: Full mode - uses `images/images-full.txt` and `devfiles/devfiles-full.txt` instead of their default counterparts
 - `-d`: Debug mode - enables verbose output, runs only first test, skips cleanup (shows skipped resources)
 - `-s <scenario>`: Skip interactive scenario prompt by specifying the scenario directly (`sshd`, `jetbrains`, or `vscode`)
-- `-p <PR_NUMBER>`: Test a che-code PR image — downloads the editor definition, replaces the che-code image with `quay.io/che-incubator-pull-requests/che-code:pr-<PR_NUMBER>-amd64`, and creates a DevWorkspaceTemplate (`che-code-pr-<PR_NUMBER>`) to use it. The che-code PR image is used regardless of the selected scenario, so this is intended for the `vscode` scenario
-- `-i <IMAGE>`: Test a custom editor image — same mechanism as `-p` but with an arbitrary image reference, using a DevWorkspaceTemplate named `che-code-custom` (mutually exclusive with `-p`)
+- `-p <PR_NUMBER>`: Test an editor PR image — downloads the editor definition, replaces the editor image with the PR image (`quay.io/che-incubator-pull-requests/che-code:pr-<PR_NUMBER>-amd64` for `vscode`, `quay.io/che-incubator-pull-requests/che-idea-dev-server:pr-<PR_NUMBER>` for `jetbrains`), and creates a DevWorkspaceTemplate (`che-code-pr-<PR_NUMBER>`) to use it. Requires `-s vscode` or `-s jetbrains`
+- `-i <IMAGE>`: Test a custom editor image — same mechanism as `-p` but with an arbitrary image reference, using a DevWorkspaceTemplate named `che-code-custom`. Requires `-s`
+- `-p` and `-i` are mutually exclusive
 - `-h`: Help - displays usage information
 
 **Debug mode specifics**: Sets `DEBUG=1`, `FULL=0`, `VERBOSE=1`, runs only the first test iteration (inner image loop uses `[[ ${DEBUG} -eq 1 && ${total_count} == 1 ]] && continue`, outer devfile loop uses `[[ ${DEBUG} -eq 1 && ${total_count} -ge 1 ]] && break`), skips cleanup to allow resource inspection.
@@ -171,7 +187,7 @@ settings/
 images/
   images.txt              # Default test list (UDI images: ubi8, ubi9, ubi10)
   images-full.txt         # Complete test matrix (219 images including UDI, base-developer-image, and UBI 8/9/10 variants)
-  images-simple.txt       # Intermediate list (38 images) for quicker validation; not referenced by the script
+  images-simple.txt       # Intermediate list (38 images) for quicker validation; not referenced by the script (the CI workflow copies it over images.txt)
 
 devfiles/
   devfiles.txt            # Default test list (nodejs, go, php-laravel, python, java-maven)
